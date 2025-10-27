@@ -4,36 +4,50 @@ __pycache__/
 *$py.class
 *.so
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-pip-wheel-metadata/
-share/python-wheels/
 *.egg-info/
-.installed.cfg
+dist/
+build/
 *.egg
-MANIFEST
 
-# Virtual Environment
+# Virtual environments
 venv/
-ENV/
+.venv/
 env/
-.venv
+ENV/
 
-# PyCharm
-.idea/
-
-# VSCode
+# IDE
 .vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pylint
+.pylint.d/
+
+# Logs
+*.log
+logs/
+*.sqlite
+*.db
+
+# Environment
+.env
+.env.local
+.env.*.local
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -41,79 +55,7 @@ env/
 # pyenv
 .python-version
 
-# pipenv
-Pipfile.lock
-
-# PEP 582
-__pypackages__/
-
-# Celery
-celerybeat-schedule
-celerybeat.pid
-
-# SageMath
-*.sage.py
-
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# Spyder
-.spyderproject
-.spyproject
-
-# Rope
-.ropeproject
-
-# mkdocs
-/site
-
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# Pyre
-.pyre/
-
-# All video formats
-*.mp4
-*.avi
-*.mov
-*.wmv
-*.flv
-*.webm
-*.mkv
-*.m4v
-*.3gp
-*.3g2
-*.asf
-*.rm
-*.rmvb
-*.vob
-*.ts
-*.mts
-*.m2ts
-*.divx
-*.xvid
-*.ogv
-*.ogm
-*.f4v
-*.f4p
-*.f4a
-*.f4b
-
-# Dataset directories (commonly contain videos)
-datasets/
-data/video/
-input/video/
-
-# OS files
+# OS
 .DS_Store
 .DS_Store?
 ._*
@@ -122,13 +64,24 @@ input/video/
 ehthumbs.db
 Thumbs.db
 
-# Logs
-*.log
-logs/
+# Project specific
+output/
+*.mp4
+*.avi
+*.mov
+*.jpg
+*.png
+!input/video/*.mp4
+*.csv
+*.json
+!config/*.json
+!input/cameras_config/*.json
 
 # Temporary files
+tmp/
+temp/
 *.tmp
-*.temp
-*.swp
-*.swo
-*~
+.cache/
+
+# Pre-commit
+.pre-commit-config.yaml.bak
