@@ -1,0 +1,8 @@
+# Core dependencies
+opencv-python>=4.8.0,<5.0.0
+numpy>=1.24.0
+
+# Database dependencies for health check
+psycopg2-binary>=2.9.0
+redis>=5.0.0
+

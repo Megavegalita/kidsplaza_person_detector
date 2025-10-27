@@ -1,0 +1,19 @@
+{
+  "postgresql": {
+    "username": "autoeyes",
+    "password": "",
+    "database": "gender_analysis",
+    "host": "localhost",
+    "port": 5432,
+    "url": "postgresql://autoeyes@localhost:5432/gender_analysis"
+  },
+  "redis": {
+    "host": "localhost",
+    "port": 6379,
+    "database": 0,
+    "username": "",
+    "password": "",
+    "url": "redis://localhost:6379"
+  }
+}
+
