@@ -10,26 +10,15 @@ Thư mục này chứa các file cấu hình cho code quality tools.
 - `pytest.ini` - Pytest configuration for testing
 - `.pre-commit-config.yaml` - Pre-commit hooks configuration
 
-## 🔗 Symlinks
-
-Các file này được symlink về root directory để tools có thể tự động tìm thấy:
-```bash
-.pylintrc -> .config/.pylintrc
-.flake8 -> .config/.flake8
-mypy.ini -> .config/mypy.ini
-pytest.ini -> .config/pytest.ini
-.pre-commit-config.yaml -> .config/.pre-commit-config.yaml
-```
-
 ## 🔧 Usage
 
-### Check Configuration
+### Option 1: Specify Config Path (Recommended)
 
 ```bash
 # Pylint
 pylint src/ --rcfile=.config/.pylintrc
 
-# Flake8
+# Flake8  
 flake8 src/ --config=.config/.flake8
 
 # MyPy
@@ -39,26 +28,39 @@ mypy src/ --config-file=.config/mypy.ini
 pytest tests/ -c .config/pytest.ini
 ```
 
-### Tự động
+### Option 2: Create Local Symlinks
 
-Vì có symlinks, các tools sẽ tự động tìm thấy config:
+Nếu muốn tools tự động tìm thấy config, tạo symlinks trong workspace:
+
 ```bash
+# Create symlinks (one time only)
+ln -s .config/.pylintrc .pylintrc
+ln -s .config/.flake8 .flake8
+ln -s .config/mypy.ini mypy.ini
+ln -s .config/pytest.ini pytest.ini
+ln -s .config/.pre-commit-config.yaml .pre-commit-config.yaml
+
+# Then use normally
 pylint src/
 flake8 src/
 mypy src/
 pytest tests/
 ```
 
+**Note**: Symlinks không được commit vào git. Mỗi developer cần tự tạo trên local.
+
 ## 📝 Customization
 
-Chỉnh sửa config files trong `.config/` directory. Symlinks sẽ tự động reflect changes.
+Chỉnh sửa config files trong `.config/` directory.
+
+**Lưu ý**: Nếu đã tạo symlinks, chỉ cần edit files trong `.config/` - changes sẽ tự động reflect qua symlinks.
 
 ## 🔄 Updating Configs
 
-Nếu thay đổi config:
-1. Edit file trong `.config/` directory
-2. Changes tự động reflect qua symlinks
-3. Không cần restart hoặc reload
+Để thay đổi config:
+1. Edit file trong `.config/` directory (không edit symlink)
+2. Changes sẽ tự động có hiệu lực cho lần chạy tiếp theo
+3. Không cần restart tools
 
 ## 📚 References
 

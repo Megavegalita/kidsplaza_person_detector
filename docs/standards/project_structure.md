@@ -6,27 +6,42 @@ Tài liệu về cấu trúc project cho Python production code.
 
 ```
 project/
-├── .cursor/
-│   └── commands/              # Best practices documentation
-│       ├── python_production_best_practices.md
-│       └── project_structure.md
+├── .config/                  # Code quality configs
+│   ├── .pylintrc            # Pylint configuration
+│   ├── .flake8              # Flake8 configuration
+│   ├── mypy.ini             # MyPy configuration
+│   ├── pytest.ini          # Pytest configuration
+│   ├── .pre-commit-config.yaml  # Pre-commit hooks
+│   └── README.md            # Config documentation
 ├── .github/
-│   └── workflows/            # CI/CD workflows
+│   └── workflows/           # CI/CD workflows
 │       ├── ci.yml
 │       └── deploy.yml
-├── config/                   # Configuration files
+├── config/                   # Application configs
 │   └── database.json
+├── docs/                     # Documentation
+│   ├── README.md
+│   ├── QUICK_START.md
+│   ├── DEVELOPER_CHECKLIST.md
+│   └── standards/
+│       ├── python_production_best_practices.md
+│       ├── FILE_CREATION_REQUIREMENTS.md
+│       └── project_structure.md
+├── templates/                # Code templates
+│   ├── template_script.py
+│   ├── template_module.py
+│   └── template_test.py
 ├── input/                    # Input data
 │   ├── cameras_config/
 │   └── video/
 ├── src/                      # Source code
 │   ├── __init__.py
-│   ├── modules/              # Reusable modules
+│   ├── modules/             # Reusable modules
 │   │   ├── __init__.py
 │   │   ├── database.py
 │   │   ├── models.py
 │   │   └── services.py
-│   └── scripts/              # Executable scripts
+│   └── scripts/             # Executable scripts
 │       ├── __init__.py
 │       ├── verify_database_health.py
 │       ├── verify_camera_health.py
@@ -40,23 +55,16 @@ project/
 │   ├── integration/
 │   │   ├── __init__.py
 │   │   └── test_api.py
-│   └── fixtures/             # Test fixtures
+│   ├── e2e/
+│   └── fixtures/            # Test fixtures
 │       └── sample_data.json
-├── docs/                     # Documentation
-│   ├── index.md
-│   ├── api.md
-│   └── deployment.md
+├── venv/                     # Virtual environment
 ├── .env.example             # Example environment variables
-├── .gitignore               # Git ignore rules
-├── .pre-commit-config.yaml  # Pre-commit hooks
-├── .pylintrc                # Pylint configuration
-├── .flake8                  # Flake8 configuration
-├── mypy.ini                 # MyPy configuration
-├── pytest.ini               # Pytest configuration
-├── requirements.txt         # Production dependencies
-├── requirements-dev.txt     # Development dependencies
-├── README.md                # Project documentation
-└── LICENSE                  # Project license
+├── .gitignore                # Git ignore rules
+├── requirements.txt          # Production dependencies
+├── requirements-dev.txt      # Development dependencies
+├── README.md                 # Project documentation
+└── LICENSE                   # Project license
 ```
 
 ---
