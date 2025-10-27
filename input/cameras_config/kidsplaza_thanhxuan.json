@@ -1,0 +1,47 @@
+{
+  "company": "Kidsplaza ",
+  "address":"Bich Xa, Thach That, Thanh Xuan, Ha Noi",
+  "server": {
+    "host": "14.177.236.96",
+    "port": 554
+  },
+  "credentials": {
+    "username": "user1",
+    "password": "cam12345"
+  },
+  "channels": [
+    {
+      "channel_id": 1,
+      "name": "channel_1",
+      "rtsp_url": "rtsp://user1:cam12345@14.177.236.96:554/cam/realmonitor?channel=1&subtype=0",
+      "description": "Kidsplaza Thanh Xuan - Camera Channel 1",
+      "localtion":"ben_ngoai_cam_phai"
+    },
+    {
+      "channel_id": 2,
+      "name": "channel_2",
+      "rtsp_url": "rtsp://user1:cam12345@14.177.236.96:554/cam/realmonitor?channel=2&subtype=0",
+      "description": "Kidsplaza Thanh Xuan - Camera Channel 2",
+      "localtion":"ben_ngoai_cam_giua"
+    },
+    {
+      "channel_id": 3,
+      "name": "channel_3",
+      "rtsp_url": "rtsp://user1:cam12345@14.177.236.96:554/cam/realmonitor?channel=3&subtype=0",
+      "description": "Kidsplaza Thanh Xuan - Camera Channel 3",
+      "localtion":"ben_trong_thu_ngan"
+    },
+    {
+      "channel_id": 4,
+      "name": "channel_4",
+      "rtsp_url": "rtsp://user1:cam12345@14.177.236.96:554/cam/realmonitor?channel=4&subtype=0",
+      "description": "Kidsplaza Thanh Xuan - Camera Channel 4",
+      "localtion":"ben_trong_cua_vao"
+    }
+  ],
+  "metadata": {
+    "total_channels": 4,
+    "created_at": "2024-01-01",
+    "updated_at": "2024-01-01"
+  }
+}
