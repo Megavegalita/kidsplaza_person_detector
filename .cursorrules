@@ -1,0 +1,166 @@
+# Cursor Rules for Python Development
+
+You are an expert Python developer focusing on production-quality code for this Kidsplaza Person Detector project.
+
+## Project Context
+
+This project is a Python-based person detection system with:
+- PostgreSQL database for data storage
+- Redis for caching
+- OpenCV for camera processing
+- Real-time RTSP camera streaming
+
+## Code Quality Standards
+
+### Required Practices
+- **Type Hints**: Always use type hints for all function parameters and return types
+- **Docstrings**: Use Google-style docstrings for all public functions and classes
+- **Error Handling**: Never use bare `except:`. Always catch specific exceptions
+- **PEP 8**: Follow PEP 8 style guide strictly
+- **Line Length**: Maximum 100 characters
+
+### Code Structure
+- Use snake_case for functions and variables
+- Use PascalCase for classes
+- Use UPPER_SNAKE_CASE for constants
+- Prefix private attributes with single underscore `_`
+
+### File Organization
+```
+src/
+├── modules/     # Reusable business logic
+└── scripts/     # Executable scripts
+tests/           # Test files matching src/ structure
+```
+
+## Development Workflow
+
+### Before Committing
+1. Format code: `black src/ && isort src/`
+2. Lint code: `flake8 src/ --config=.config/.flake8`
+3. Type check: `mypy src/ --config-file=.config/mypy.ini`
+4. Run tests: `pytest tests/ -c .config/pytest.ini`
+5. Security check: `bandit -r src/`
+
+### When Creating New Files
+- Use templates from `templates/` directory
+- Follow structure in `docs/standards/FILE_CREATION_REQUIREMENTS.md`
+- Include shebang `#!/usr/bin/env python3` for scripts
+- Add module docstring
+- Include type hints and function docstrings
+
+### Testing Requirements
+- Write unit tests for all functions
+- Aim for >80% code coverage
+- Test edge cases and error conditions
+- Use pytest fixtures for test data
+- Mock external dependencies
+
+## Database Best Practices
+
+- Use context managers for connections
+- Always close connections properly
+- Implement retry logic with exponential backoff
+- Validate inputs before database operations
+- Use parameterized queries to prevent SQL injection
+
+## Security Requirements
+
+- Never hardcode secrets
+- Use environment variables for sensitive data
+- Validate all user inputs
+- Sanitize file paths to prevent directory traversal
+- Check dependencies for vulnerabilities with `safety check`
+
+## Configuration Files
+
+All config files are in `.config/` directory:
+- `.pylintrc` - Pylint configuration
+- `.flake8` - Flake8 configuration
+- `mypy.ini` - MyPy type checking
+- `pytest.ini` - Pytest configuration
+- `.pre-commit-config.yaml` - Pre-commit hooks
+
+## Documentation Standards
+
+- Update README.md when adding features
+- Document all public APIs
+- Keep docstrings up to date
+- Include usage examples in docstrings
+- Reference related files in module docstrings
+
+## Common Commands
+
+```bash
+# Code quality
+black src/ && isort src/
+flake8 src/ --config=.config/.flake8
+pylint src/ --rcfile=.config/.pylintrc
+mypy src/ --config-file=.config/mypy.ini
+
+# Testing
+pytest tests/ -c .config/pytest.ini
+pytest tests/ -c .config/pytest.ini --cov=src
+
+# Health checks
+python src/scripts/verify_database_health.py
+python src/scripts/verify_camera_health.py
+```
+
+## Important Files
+
+- `docs/QUICK_START.md` - Getting started guide
+- `docs/DEVELOPER_CHECKLIST.md` - Development checklist
+- `docs/standards/` - Best practices and standards
+- `templates/` - Code templates
+- `.config/` - Configuration files
+
+## Error Handling Pattern
+
+```python
+try:
+    # Main logic
+    result = process_data()
+    return result
+except SpecificException as e:
+    logger.error(f"Specific error: {e}")
+    raise
+except Exception as e:
+    logger.exception(f"Unexpected error: {e}")
+    raise
+```
+
+## Type Hint Pattern
+
+```python
+from typing import Dict, List, Optional, Tuple
+
+def function_name(
+    param1: str,
+    param2: Optional[int] = None
+) -> Tuple[bool, Optional[str]]:
+    """
+    Function description.
+    
+    Args:
+        param1: Description
+        param2: Optional description
+        
+    Returns:
+        Tuple of (success, error_message)
+        
+    Raises:
+        ValueError: If validation fails
+    """
+    pass
+```
+
+## Remember
+
+- Always prioritize code quality and maintainability
+- Write self-documenting code
+- Consider edge cases and error scenarios
+- Keep functions small and focused
+- Follow DRY (Don't Repeat Yourself) principle
+- Write tests before committing
+
