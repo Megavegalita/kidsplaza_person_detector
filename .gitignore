@@ -23,6 +23,11 @@ ENV/
 *.sublime-project
 *.sublime-workspace
 
+# Cursor (track commands but ignore rules)
+.cursor/rules
+!.cursor/commands.json
+!.cursor/README.md
+
 # Testing
 .pytest_cache/
 .coverage

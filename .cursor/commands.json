@@ -1,0 +1,76 @@
+{
+  "$schema": "https://cursor.com/schemas/commands.json",
+  "commands": [
+    {
+      "name": "run-linting",
+      "command": "flake8 src/ --config=.config/.flake8 && pylint src/ --rcfile=.config/.pylintrc",
+      "description": "Run all linting checks on source code"
+    },
+    {
+      "name": "run-type-checking",
+      "command": "mypy src/ --config-file=.config/mypy.ini",
+      "description": "Run MyPy type checking"
+    },
+    {
+      "name": "format-code",
+      "command": "black src/ && isort src/",
+      "description": "Format code with black and isort"
+    },
+    {
+      "name": "run-tests",
+      "command": "pytest tests/ -c .config/pytest.ini",
+      "description": "Run all tests"
+    },
+    {
+      "name": "run-tests-with-coverage",
+      "command": "pytest tests/ -c .config/pytest.ini --cov=src --cov-report=html",
+      "description": "Run tests with coverage report"
+    },
+    {
+      "name": "code-quality-check",
+      "command": "black src/ && isort src/ && flake8 src/ --config=.config/.flake8 && pylint src/ --rcfile=.config/.pylintrc && mypy src/ --config-file=.config/mypy.ini",
+      "description": "Run all code quality checks (format, lint, type check)"
+    },
+    {
+      "name": "pre-commit-check",
+      "command": "pre-commit run --all-files",
+      "description": "Run pre-commit hooks on all files"
+    },
+    {
+      "name": "security-check",
+      "command": "bandit -r src/",
+      "description": "Run security check with bandit"
+    },
+    {
+      "name": "health-check-database",
+      "command": "python src/scripts/verify_database_health.py",
+      "description": "Verify database health"
+    },
+    {
+      "name": "health-check-camera",
+      "command": "python src/scripts/verify_camera_health.py",
+      "description": "Verify camera health"
+    },
+    {
+      "name": "clean-cache",
+      "command": "find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null; find . -type f -name '*.pyc' -delete; find . -type d -name '.pytest_cache' -exec rm -rf {} + 2>/dev/null; find . -type d -name '.mypy_cache' -exec rm -rf {} + 2>/dev/null; echo 'Cache cleaned'",
+      "description": "Clean Python cache files"
+    },
+    {
+      "name": "install-dev-deps",
+      "command": "source venv/bin/activate && pip install -r requirements-dev.txt",
+      "description": "Install development dependencies"
+    },
+    {
+      "name": "update-requirements",
+      "command": "source venv/bin/activate && pip freeze > requirements.txt",
+      "description": "Update requirements.txt with current packages"
+    },
+    {
+      "name": "check-dependencies",
+      "command": "safety check",
+      "description": "Check for vulnerable dependencies"
+    }
+  ]
+}
+
