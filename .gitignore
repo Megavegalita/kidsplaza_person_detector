@@ -69,13 +69,24 @@ output/
 *.mp4
 *.avi
 *.mov
+*.mkv
+*.m4v
+*.wmv
+*.flv
+*.webm
 *.jpg
+*.jpeg
 *.png
-!input/video/*.mp4
+*.gif
+*.bmp
+*.tiff
 *.csv
 *.json
 !config/*.json
 !input/cameras_config/*.json
+
+# Large video files (>100MB)
+input/video/*.mp4
 
 # Temporary files
 tmp/

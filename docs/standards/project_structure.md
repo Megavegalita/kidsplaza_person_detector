@@ -7,7 +7,7 @@ Tài liệu về cấu trúc project cho Python production code.
 ```
 project/
 ├── .cursor/
-│   └── command/              # Best practices documentation
+│   └── commands/              # Best practices documentation
 │       ├── python_production_best_practices.md
 │       └── project_structure.md
 ├── .github/
