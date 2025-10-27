@@ -162,12 +162,12 @@ source venv/bin/activate
 # 3. Quality checks
 black src/
 isort src/
-flake8 src/
-pylint src/
-mypy src/
+flake8 src/ --config=.config/.flake8
+pylint src/ --rcfile=.config/.pylintrc
+mypy src/ --config-file=.config/mypy.ini
 
 # 4. Run tests
-pytest tests/
+pytest tests/ -c .config/pytest.ini
 
 # 5. Commit
 git add .
@@ -250,16 +250,16 @@ black src/
 isort src/
 
 # Linting
-flake8 src/
-pylint src/
-mypy src/
+flake8 src/ --config=.config/.flake8
+pylint src/ --rcfile=.config/.pylintrc
+mypy src/ --config-file=.config/mypy.ini
 
 # Testing
-pytest                           # Run all tests
-pytest tests/unit/              # Run unit tests only
-pytest -v                        # Verbose output
-pytest --cov=src                # With coverage
-pytest tests/test_file.py -k test_name  # Specific test
+pytest tests/ -c .config/pytest.ini                           # Run all tests
+pytest tests/unit/ -c .config/pytest.ini                    # Run unit tests only
+pytest -v -c .config/pytest.ini                              # Verbose output
+pytest -c .config/pytest.ini --cov=src                       # With coverage
+pytest tests/test_file.py -c .config/pytest.ini -k test_name  # Specific test
 
 # Pre-commit
 pre-commit run --all-files      # Run all files

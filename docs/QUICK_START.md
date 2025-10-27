@@ -67,29 +67,29 @@ isort src/
 
 ### Linting
 ```bash
-# Run Flake8 (config: .config/.flake8)
-flake8 src/
+# Run Flake8
+flake8 src/ --config=.config/.flake8
 
-# Run Pylint (config: .config/.pylintrc)
-pylint src/
+# Run Pylint
+pylint src/ --rcfile=.config/.pylintrc
 
-# Run MyPy type checking (config: .config/mypy.ini)
-mypy src/
+# Run MyPy type checking
+mypy src/ --config-file=.config/mypy.ini
 ```
 
 ### Testing
 ```bash
-# Run all tests (config: .config/pytest.ini)
-pytest
+# Run all tests
+pytest tests/ -c .config/pytest.ini
 
 # Run with coverage
-pytest --cov=src --cov-report=html
+pytest tests/ -c .config/pytest.ini --cov=src --cov-report=html
 
 # Run specific test
-pytest tests/unit/test_database.py
+pytest tests/unit/test_database.py -c .config/pytest.ini
 ```
 
-**Note**: Config files được organize trong `.config/` directory và tự động được detect bởi các tools.
+**Note**: Config files được organize trong `.config/` directory. Xem `.config/README.md` để biết thêm chi tiết.
 
 ### Security Checks
 ```bash
