@@ -214,32 +214,44 @@ class Tracker:
     
     def _associate_detections_to_tracks(self, cost_matrix: np.ndarray) -> List[Tuple[int, int]]:
         """
-        Associate detections to tracks using greedy matching.
-        
+        Associate detections to tracks using one-to-one greedy matching by IoU.
+
+        Ensures each detection maps to at most one track and
+        each track is used by at most one detection within a frame.
+
         Args:
-            cost_matrix: IoU cost matrix
-            
+            cost_matrix: IoU cost matrix (shape: num_detections x num_tracks)
+
         Returns:
             List of (detection_idx, track_idx) matches
         """
         if cost_matrix.size == 0:
             return []
-        
-        matches = []
-        
-        # Greedy matching based on IoU
-        for d_idx in range(len(cost_matrix)):
-            best_iou = 0
-            best_track_idx = -1
-            
-            for t_idx in range(len(cost_matrix[d_idx])):
-                if cost_matrix[d_idx][t_idx] > best_iou:
-                    best_iou = cost_matrix[d_idx][t_idx]
-                    best_track_idx = t_idx
-            
-            if best_iou >= self.iou_threshold:
-                matches.append((d_idx, best_track_idx))
-        
+
+        num_detections, num_tracks = cost_matrix.shape
+
+        # Build candidate pairs above threshold
+        candidates: List[Tuple[float, int, int]] = []  # (iou, d_idx, t_idx)
+        for d_idx in range(num_detections):
+            for t_idx in range(num_tracks):
+                iou = float(cost_matrix[d_idx][t_idx])
+                if iou >= self.iou_threshold:
+                    candidates.append((iou, d_idx, t_idx))
+
+        # Sort by IoU descending for greedy selection
+        candidates.sort(key=lambda x: x[0], reverse=True)
+
+        used_detections = set()
+        used_tracks = set()
+        matches: List[Tuple[int, int]] = []
+
+        for iou, d_idx, t_idx in candidates:
+            if d_idx in used_detections or t_idx in used_tracks:
+                continue
+            used_detections.add(d_idx)
+            used_tracks.add(t_idx)
+            matches.append((d_idx, t_idx))
+
         return matches
     
     def _get_confirmed_tracks(self) -> List[Dict]:
