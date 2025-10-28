@@ -142,7 +142,10 @@ class ImageProcessor:
             cv2.rectangle(annotated, (x1, y1), (x2, y2), color, thickness)
             
             if show_labels:
+                # Build label with track_id if available
                 label = f"{detection.get('class_name', 'person')}: {conf:.2f}"
+                if 'track_id' in detection:
+                    label = f"ID{detection['track_id']} - {label}"
                 
                 # Draw label background
                 (text_width, text_height), baseline = cv2.getTextSize(

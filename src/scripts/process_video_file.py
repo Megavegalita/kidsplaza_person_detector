@@ -218,6 +218,12 @@ class VideoProcessor:
             # Run tracking
             tracked_objects = self.tracker.update(detections)
             
+            # Add track_id to detections for visualization
+            # Create a mapping from bbox to track_id
+            for i, detection in enumerate(detections):
+                if i < len(tracked_objects):
+                    detection['track_id'] = tracked_objects[i].get('track_id', i+1)
+            
             # Store results
             frame_results.append({
                 'frame_number': frame_num,
@@ -226,6 +232,13 @@ class VideoProcessor:
                 'detections': detections,
                 'tracks': tracked_objects
             })
+            
+            # Redraw annotations with track IDs if needed
+            if annotated is None and len(detections) > 0:
+                annotated = self.detector.processor.draw_detections(frame, detections)
+            elif annotated is not None:
+                # Redraw to include track IDs
+                annotated = self.detector.processor.draw_detections(annotated, detections)
             
             # Add overlay with info
             if save_annotated:
