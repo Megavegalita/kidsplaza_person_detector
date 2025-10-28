@@ -189,7 +189,8 @@ class Tracker:
             if t.time_since_update <= self.max_age
         ]
         
-        return self._get_confirmed_tracks()
+        # Return tracked detections with track_id attached
+        return self._attach_track_ids_to_detections(detections, matched_indices)
     
     def _compute_cost_matrix(self, detections: List[Dict]) -> np.ndarray:
         """Compute IoU cost matrix between detections and tracks."""
@@ -254,6 +255,37 @@ class Tracker:
                 })
         
         return confirmed_tracks
+    
+    def _attach_track_ids_to_detections(
+        self, 
+        detections: List[Dict], 
+        matched_indices: List[Tuple[int, int]]
+    ) -> List[Dict]:
+        """
+        Attach track_id to each detection based on matching results.
+        
+        Args:
+            detections: List of detection dicts
+            matched_indices: List of (detection_idx, track_idx) tuples
+            
+        Returns:
+            List of detections with track_id added
+        """
+        tracked_detections = []
+        
+        # Create mapping from detection index to track_id
+        detection_to_track = {}
+        for d_idx, t_idx in matched_indices:
+            if t_idx < len(self.tracks):
+                detection_to_track[d_idx] = self.tracks[t_idx].track_id
+        
+        # Attach track_id to each detection
+        for i, detection in enumerate(detections):
+            detection_copy = detection.copy()
+            detection_copy['track_id'] = detection_to_track.get(i, None)
+            tracked_detections.append(detection_copy)
+        
+        return tracked_detections
     
     def reset(self) -> None:
         """Reset tracker state."""

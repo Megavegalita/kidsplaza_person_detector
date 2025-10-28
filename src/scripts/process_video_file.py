@@ -215,22 +215,19 @@ class VideoProcessor:
             # Run detection
             detections, annotated = self.detector.detect(frame, return_image=True)
             
-            # Run tracking
-            tracked_objects = self.tracker.update(detections)
+            # Run tracking - tracker now returns detections with track_id attached
+            tracked_detections = self.tracker.update(detections)
             
-            # Add track_id to detections for visualization
-            # Create a mapping from bbox to track_id
-            for i, detection in enumerate(detections):
-                if i < len(tracked_objects):
-                    detection['track_id'] = tracked_objects[i].get('track_id', i+1)
+            # Use tracked_detections which already have track_id attached
+            detections = tracked_detections
             
             # Store results
             frame_results.append({
                 'frame_number': frame_num,
                 'detection_count': len(detections),
-                'tracked_count': len(tracked_objects),
+                'tracked_count': len([d for d in detections if d.get('track_id') is not None]),
                 'detections': detections,
-                'tracks': tracked_objects
+                'tracks': [d for d in detections if d.get('track_id') is not None]
             })
             
             # Redraw annotations with track IDs if needed
@@ -242,16 +239,17 @@ class VideoProcessor:
             
             # Add overlay with info
             if save_annotated:
+                tracked_count = len([d for d in detections if d.get('track_id') is not None])
                 if annotated is not None:
                     annotated = self._add_overlay(
-                        annotated, frame_num, len(detections), len(tracked_objects),
+                        annotated, frame_num, len(detections), tracked_count,
                         time.time() - start_time,
                         self.detector.model_loader.get_device(),
                         self.detector.model_loader.is_mps_enabled()
                     )
                 else:
                     annotated = self._add_overlay(
-                        frame, frame_num, len(detections), len(tracked_objects),
+                        frame, frame_num, len(detections), tracked_count,
                         time.time() - start_time,
                         self.detector.model_loader.get_device(),
                         self.detector.model_loader.is_mps_enabled()
