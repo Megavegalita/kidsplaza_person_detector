@@ -14,6 +14,7 @@ from typing import Dict, List, Optional
 import cv2
 import json
 import time
+import numpy as np
 from datetime import datetime
 
 # Add src to path
@@ -59,6 +60,70 @@ class VideoProcessor:
         logger.info(f"Video processor initialized")
         logger.info(f"Device: {self.detector.model_loader.get_device()}")
         logger.info(f"MPS enabled: {self.detector.model_loader.is_mps_enabled()}")
+    
+    def _add_overlay(self, frame: np.ndarray, frame_num: int, detection_count: int, 
+                     elapsed_time: float, device: str, mps_enabled: bool) -> np.ndarray:
+        """
+        Add information overlay to frame.
+        
+        Args:
+            frame: Input frame
+            frame_num: Current frame number
+            detection_count: Number of detections
+            elapsed_time: Elapsed time in seconds
+            device: Device used (mps/cpu)
+            mps_enabled: Whether MPS is enabled
+            
+        Returns:
+            Frame with overlay
+        """
+        overlay = frame.copy()
+        
+        # Calculate FPS
+        fps = frame_num / elapsed_time if elapsed_time > 0 else 0
+        
+        # Info box background (top-left)
+        h, w = frame.shape[:2]
+        box_height = 160
+        box_width = 300
+        overlay = cv2.rectangle(overlay, (0, 0), (box_width, box_height), 
+                                (0, 0, 0), -1)
+        
+        # Add semi-transparent background
+        alpha = 0.5
+        cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+        
+        # Draw info text
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.6
+        font_thickness = 1
+        text_color = (0, 255, 0)
+        y_offset = 20
+        
+        cv2.putText(frame, f"Frame: {frame_num}", (10, y_offset), 
+                   font, font_scale, text_color, font_thickness)
+        y_offset += 25
+        
+        cv2.putText(frame, f"Detections: {detection_count}", (10, y_offset), 
+                   font, font_scale, text_color, font_thickness)
+        y_offset += 25
+        
+        cv2.putText(frame, f"FPS: {fps:.1f}", (10, y_offset), 
+                   font, font_scale, text_color, font_thickness)
+        y_offset += 25
+        
+        device_str = f"Device: {device.upper()}"
+        if mps_enabled and device == 'mps':
+            device_str += " (GPU)"
+        cv2.putText(frame, device_str, (10, y_offset), 
+                   font, font_scale, text_color, font_thickness)
+        y_offset += 25
+        
+        elapsed_str = f"Time: {elapsed_time:.1f}s"
+        cv2.putText(frame, elapsed_str, (10, y_offset), 
+                   font, font_scale, text_color, font_thickness)
+        
+        return frame
     
     def process_video(
         self,
@@ -133,11 +198,24 @@ class VideoProcessor:
                 'detections': detections
             })
             
-            # Write annotated frame
-            if save_annotated and annotated is not None:
+            # Add overlay with info
+            if save_annotated:
+                if annotated is not None:
+                    annotated = self._add_overlay(
+                        annotated, frame_num, len(detections), 
+                        time.time() - start_time,
+                        self.detector.model_loader.get_device(),
+                        self.detector.model_loader.is_mps_enabled()
+                    )
+                else:
+                    annotated = self._add_overlay(
+                        frame, frame_num, len(detections),
+                        time.time() - start_time,
+                        self.detector.model_loader.get_device(),
+                        self.detector.model_loader.is_mps_enabled()
+                    )
+                
                 video_writer.write(annotated)
-            elif save_annotated:
-                video_writer.write(frame)
             
             # Progress logging
             if frame_num % 100 == 0:
