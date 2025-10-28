@@ -163,13 +163,29 @@ class VideoProcessor:
         if save_annotated:
             output_name = output_name or f"annotated_{video_path.stem}.mp4"
             output_path = self.output_dir / output_name
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            
+            # Use H.264 codec for better compatibility
+            # Try 'avc1' first (H.264), fallback to 'mp4v' if not available
+            fourcc = cv2.VideoWriter_fourcc(*'avc1')
+            logger.info(f"Using codec: H.264 (avc1)")
+            
             video_writer = cv2.VideoWriter(
                 str(output_path),
                 fourcc,
                 fps,
                 (width, height)
             )
+            
+            if not video_writer.isOpened():
+                logger.warning("H.264 codec not available, trying mp4v")
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                video_writer = cv2.VideoWriter(
+                    str(output_path),
+                    fourcc,
+                    fps,
+                    (width, height)
+                )
+            
             logger.info(f"Output video: {output_path}")
         
         # Process frames (limit to first 3 minutes for testing)
