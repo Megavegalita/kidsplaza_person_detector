@@ -10,7 +10,7 @@ import logging
 import sys
 import argparse
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 import cv2
 import json
 import time
@@ -107,14 +107,15 @@ class VideoProcessor:
             )
             logger.info(f"Output video: {output_path}")
         
-        # Process frames
+        # Process frames (limit to first 3 minutes for testing)
         frame_results = []
         frame_num = 0
+        max_frames = min(total_frames, fps * 60 * 3)  # 3 minutes max
         start_time = time.time()
         
-        logger.info("Starting frame processing...")
+        logger.info(f"Starting frame processing... (max {max_frames} frames)")
         
-        while True:
+        while frame_num < max_frames:
             ret, frame = cap.read()
             
             if not ret:

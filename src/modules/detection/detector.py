@@ -13,8 +13,8 @@ import torch
 from concurrent.futures import ThreadPoolExecutor
 import threading
 
-from model_loader import ModelLoader, ModelLoaderError
-from image_processor import ImageProcessor
+from .model_loader import ModelLoader, ModelLoaderError
+from .image_processor import ImageProcessor
 
 logger = logging.getLogger(__name__)
 
