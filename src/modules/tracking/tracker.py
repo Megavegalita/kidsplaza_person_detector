@@ -149,9 +149,12 @@ class Tracker:
                     confidence=detection['confidence'],
                     class_name=detection.get('class_name', 'person')
                 )
+                track.hits = self.min_hits  # Start confirmed
                 self.tracks.append(track)
                 self.next_id += 1
-            return self._get_confirmed_tracks()
+            # Return detections with track_ids
+            matched_indices = [(i, i) for i in range(len(detections))]
+            return self._attach_track_ids_to_detections(detections, matched_indices)
         
         # Create cost matrix for Hungarian algorithm (IoU)
         cost_matrix = self._compute_cost_matrix(detections)
