@@ -160,18 +160,15 @@ class Tracker:
         matched_indices = self._associate_detections_to_tracks(cost_matrix)
         
         # Update matched tracks
-        unmatched_detections = []
-        unmatched_tracks = []
+        unmatched_detections = set(range(len(detections)))
+        matched_tracks = set()
         
-        for d_idx, t_idx in enumerate(self.tracks):
-            if d_idx < len(cost_matrix):
-                if t_idx < len(self.tracks):
-                    if cost_matrix[d_idx][t_idx] < self.iou_threshold:
-                        unmatched_detections.append(d_idx)
-                    else:
-                        track = self.tracks[t_idx]
-                        bbox = self._convert_detection(detections[d_idx])
-                        track.update(bbox, detections[d_idx]['confidence'])
+        for d_idx, t_idx in matched_indices:
+            matched_tracks.add(t_idx)
+            unmatched_detections.discard(d_idx)
+            track = self.tracks[t_idx]
+            bbox = self._convert_detection(detections[d_idx])
+            track.update(bbox, detections[d_idx]['confidence'])
         
         # Handle unmatched detections (create new tracks)
         for d_idx in unmatched_detections:
