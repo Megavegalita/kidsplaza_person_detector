@@ -21,6 +21,7 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from modules.detection.detector import Detector
+from modules.tracking.tracker import Tracker
 
 logging.basicConfig(
     level=logging.INFO,
@@ -57,12 +58,15 @@ class VideoProcessor:
             conf_threshold=conf_threshold
         )
         
+        # Initialize tracker
+        self.tracker = Tracker()
+        
         logger.info(f"Video processor initialized")
         logger.info(f"Device: {self.detector.model_loader.get_device()}")
         logger.info(f"MPS enabled: {self.detector.model_loader.is_mps_enabled()}")
     
     def _add_overlay(self, frame: np.ndarray, frame_num: int, detection_count: int, 
-                     elapsed_time: float, device: str, mps_enabled: bool) -> np.ndarray:
+                     tracked_count: int, elapsed_time: float, device: str, mps_enabled: bool) -> np.ndarray:
         """
         Add information overlay to frame.
         
@@ -105,6 +109,10 @@ class VideoProcessor:
         y_offset += 25
         
         cv2.putText(frame, f"Detections: {detection_count}", (10, y_offset), 
+                   font, font_scale, text_color, font_thickness)
+        y_offset += 25
+        
+        cv2.putText(frame, f"Tracks: {tracked_count}", (10, y_offset), 
                    font, font_scale, text_color, font_thickness)
         y_offset += 25
         
@@ -207,25 +215,30 @@ class VideoProcessor:
             # Run detection
             detections, annotated = self.detector.detect(frame, return_image=True)
             
+            # Run tracking
+            tracked_objects = self.tracker.update(detections)
+            
             # Store results
             frame_results.append({
                 'frame_number': frame_num,
                 'detection_count': len(detections),
-                'detections': detections
+                'tracked_count': len(tracked_objects),
+                'detections': detections,
+                'tracks': tracked_objects
             })
             
             # Add overlay with info
             if save_annotated:
                 if annotated is not None:
                     annotated = self._add_overlay(
-                        annotated, frame_num, len(detections), 
+                        annotated, frame_num, len(detections), len(tracked_objects),
                         time.time() - start_time,
                         self.detector.model_loader.get_device(),
                         self.detector.model_loader.is_mps_enabled()
                     )
                 else:
                     annotated = self._add_overlay(
-                        frame, frame_num, len(detections),
+                        frame, frame_num, len(detections), len(tracked_objects),
                         time.time() - start_time,
                         self.detector.model_loader.get_device(),
                         self.detector.model_loader.is_mps_enabled()
