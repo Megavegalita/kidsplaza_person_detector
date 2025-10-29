@@ -31,7 +31,7 @@ from modules.demographics import GenderClassifier
 from modules.demographics.async_worker import AsyncGenderWorker
 from modules.demographics.metrics import GenderMetrics
 from modules.demographics.face_detector import FaceDetector
-from modules.demographics.face_gender_classifier import FaceGenderClassifier
+from modules.demographics.resnet50_gender_classifier import ResNet50GenderClassifier
 
 logging.basicConfig(
     level=logging.INFO,
@@ -109,8 +109,9 @@ class VideoProcessor:
         self.face_detector = (
             FaceDetector(min_detection_confidence=0.5) if (gender_enable and gender_enable_face_detection) else None
         )
+        # Use ResNet50 trained model instead of MobileNetV2
         self.face_gender_classifier = (
-            FaceGenderClassifier(min_confidence=gender_min_confidence) if (gender_enable and gender_enable_face_detection) else None
+            ResNet50GenderClassifier(min_confidence=gender_min_confidence) if (gender_enable and gender_enable_face_detection) else None
         )
         self.gender_worker = (
             AsyncGenderWorker(max_workers=gender_workers, queue_size=gender_queue_size, task_timeout_ms=gender_timeout_ms)
