@@ -32,6 +32,7 @@ from modules.demographics.async_worker import AsyncGenderWorker
 from modules.demographics.metrics import GenderMetrics
 from modules.demographics.face_detector import FaceDetector
 from modules.demographics.resnet50_gender_classifier import ResNet50GenderClassifier
+from modules.demographics.keras_tf_gender_classifier import KerasTFGenderClassifier
 
 logging.basicConfig(
     level=logging.INFO,
@@ -109,9 +110,9 @@ class VideoProcessor:
         self.face_detector = (
             FaceDetector(min_detection_confidence=0.5) if (gender_enable and gender_enable_face_detection) else None
         )
-        # Use ResNet50 trained model instead of MobileNetV2
+        # Use your trained Keras model for best accuracy
         self.face_gender_classifier = (
-            ResNet50GenderClassifier(min_confidence=gender_min_confidence) if (gender_enable and gender_enable_face_detection) else None
+            KerasTFGenderClassifier(min_confidence=gender_min_confidence) if (gender_enable and gender_enable_face_detection) else None
         )
         self.gender_worker = (
             AsyncGenderWorker(max_workers=gender_workers, queue_size=gender_queue_size, task_timeout_ms=gender_timeout_ms)
@@ -706,14 +707,14 @@ def main():
     parser.add_argument(
         '--gender-min-confidence',
         type=float,
-        default=0.5,
-        help='Minimum confidence threshold for gender classification (default: 0.5)'
+        default=0.4,
+        help='Minimum confidence threshold for gender classification (default: 0.4)'
     )
     parser.add_argument(
         '--gender-voting-window',
         type=int,
-        default=10,
-        help='Voting window size for gender stability (default: 10)'
+        default=25,
+        help='Voting window size for gender stability (default: 25)'
     )
     parser.add_argument(
         '--gender-enable-face-detection',
