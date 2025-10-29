@@ -146,6 +146,15 @@ class ImageProcessor:
                 label = f"{detection.get('class_name', 'person')}: {conf:.2f}"
                 if 'track_id' in detection:
                     label = f"ID{detection['track_id']} - {label}"
+                # Append gender if available (use full name instead of M/F)
+                gender = detection.get('gender')
+                gconf = detection.get('gender_confidence')
+                if gender is not None:
+                    gender_full = 'Male' if gender == 'M' else 'Female' if gender == 'F' else 'Unknown'
+                    if isinstance(gconf, (int, float)):
+                        label = f"{label} | {gender_full}({gconf:.2f})"
+                    else:
+                        label = f"{label} | {gender_full}"
                 
                 # Draw label background
                 (text_width, text_height), baseline = cv2.getTextSize(

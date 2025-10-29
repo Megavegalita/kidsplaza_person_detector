@@ -25,10 +25,15 @@ class Track:
     age: int = 0
     hits: int = 0
     time_since_update: int = 0
+    _last_bbox: Optional[np.ndarray] = None
     
-    def update(self, bbox: np.ndarray, confidence: float) -> None:
-        """Update track with new detection."""
-        self.bbox = bbox
+    def update(self, bbox: np.ndarray, confidence: float, ema_alpha: float) -> None:
+        """Update track with new detection using EMA smoothing on bbox."""
+        if self._last_bbox is None:
+            self.bbox = bbox
+        else:
+            self.bbox = self._ema_smooth(self._last_bbox, bbox, ema_alpha)
+        self._last_bbox = self.bbox.copy()
         self.confidence = confidence
         self.hits += 1
         self.time_since_update = 0
@@ -37,6 +42,12 @@ class Track:
         """Predict next position (simple constant velocity model)."""
         self.age += 1
         self.time_since_update += 1
+    
+    @staticmethod
+    def _ema_smooth(prev_bbox: np.ndarray, new_bbox: np.ndarray, alpha: float) -> np.ndarray:
+        """Apply exponential moving average to smooth bbox coordinates."""
+        alpha = float(min(max(alpha, 0.0), 1.0))
+        return (alpha * new_bbox) + ((1.0 - alpha) * prev_bbox)
 
 
 class Tracker:
@@ -51,7 +62,8 @@ class Tracker:
         self,
         max_age: int = 30,
         min_hits: int = 3,
-        iou_threshold: float = 0.3
+        iou_threshold: float = 0.3,
+        ema_alpha: float = 0.5
     ) -> None:
         """
         Initialize tracker.
@@ -60,17 +72,20 @@ class Tracker:
             max_age: Maximum age of inactive tracks before deletion
             min_hits: Minimum hits required for a track to be confirmed
             iou_threshold: IoU threshold for track-detection association
+            ema_alpha: EMA smoothing factor for bbox (0.0-1.0)
         """
         self.max_age = max_age
         self.min_hits = min_hits
         self.iou_threshold = iou_threshold
+        self.ema_alpha = ema_alpha
         
         self.tracks: List[Track] = []
         self.next_id = 1
         
         logger.info(
             f"Tracker initialized: max_age={max_age}, "
-            f"min_hits={min_hits}, iou_threshold={iou_threshold}"
+            f"min_hits={min_hits}, iou_threshold={iou_threshold}, "
+            f"ema_alpha={ema_alpha}"
         )
     
     def _iou(self, box1: np.ndarray, box2: np.ndarray) -> float:
@@ -112,14 +127,16 @@ class Tracker:
             Bounding box as [x1, y1, x2, y2]
         """
         bbox = detection['bbox']
-        
-        # Convert [x, y, w, h] to [x1, y1, x2, y2]
-        x1 = bbox[0]
-        y1 = bbox[1]
-        x2 = bbox[0] + bbox[2]
-        y2 = bbox[1] + bbox[3]
-        
-        return np.array([x1, y1, x2, y2])
+        # Support both [x1,y1,x2,y2] and [x,y,w,h]
+        x1 = float(bbox[0])
+        y1 = float(bbox[1])
+        x2 = float(bbox[2])
+        y2 = float(bbox[3])
+        # Heuristic: if x2>x1 and y2>y1, assume already xyxy
+        if x2 > x1 and y2 > y1:
+            return np.array([x1, y1, x2, y2], dtype=np.float32)
+        # Else treat as xywh
+        return np.array([x1, y1, x1 + x2, y1 + y2], dtype=np.float32)
     
     def update(self, detections: List[Dict]) -> List[Dict]:
         """
@@ -156,7 +173,7 @@ class Tracker:
             matched_indices = [(i, i) for i in range(len(detections))]
             return self._attach_track_ids_to_detections(detections, matched_indices)
         
-        # Create cost matrix for Hungarian algorithm (IoU)
+        # Create cost matrix for IoU-based matching
         cost_matrix = self._compute_cost_matrix(detections)
         
         # Associate detections to tracks
@@ -171,7 +188,7 @@ class Tracker:
             unmatched_detections.discard(d_idx)
             track = self.tracks[t_idx]
             bbox = self._convert_detection(detections[d_idx])
-            track.update(bbox, detections[d_idx]['confidence'])
+            track.update(bbox, detections[d_idx]['confidence'], self.ema_alpha)
         
         # Handle unmatched detections (create new tracks)
         for d_idx in unmatched_detections:
@@ -297,7 +314,14 @@ class Tracker:
         # Attach track_id to each detection
         for i, detection in enumerate(detections):
             detection_copy = detection.copy()
-            detection_copy['track_id'] = detection_to_track.get(i, None)
+            t_id = detection_to_track.get(i, None)
+            detection_copy['track_id'] = t_id
+            if t_id is not None:
+                # Attach tracker metadata to support downstream gating (e.g., Re-ID policies)
+                track = next((t for t in self.tracks if t.track_id == t_id), None)
+                if track is not None:
+                    detection_copy['hits'] = track.hits
+                    detection_copy['time_since_update'] = track.time_since_update
             tracked_detections.append(detection_copy)
         
         return tracked_detections
