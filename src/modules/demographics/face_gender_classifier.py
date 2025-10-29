@@ -7,6 +7,7 @@ Pretrained on UTKFace dataset for robust performance.
 """
 
 import logging
+from pathlib import Path
 from typing import Optional, Tuple
 import numpy as np
 import cv2
@@ -44,24 +45,32 @@ class FaceGenderClassifier:
     
     def _build_model(self) -> nn.Module:
         """Build MobileNetV2 model for gender classification."""
-        # Load pretrained MobileNetV2
-        model = models.mobilenet_v2(weights=models.MobileNet_V2_Weights.IMAGENET1K_V1)
+        # Load pretrained MobileNetV2 from ImageNet
+        base_model = models.mobilenet_v2(weights=models.MobileNet_V2_Weights.IMAGENET1K_V1)
         
         # Replace final classifier for 2 classes (Male/Female)
-        in_features = model.classifier[1].in_features
-        model.classifier[1] = nn.Linear(in_features, 2)
+        in_features = base_model.classifier[1].in_features
+        base_model.classifier[1] = nn.Linear(in_features, 2)
         
-        # Note: In production, you would load pretrained gender weights here
-        # For now, we use ImageNet weights as a starting point
-        # TODO: Download and load DeGirum pretrained weights from Hugging Face
-        # model.load_state_dict(torch.load('models/de girum_gender_mobilenetv2.pth'))
+        # Try to load UTKFace pretrained gender weights if available
+        # These would need to be downloaded separately
+        pretrained_path = Path(__file__).parent.parent.parent / 'models' / 'mobilenetv2_gender_utkface.pth'
+        
+        if pretrained_path.exists():
+            try:
+                base_model.load_state_dict(torch.load(str(pretrained_path), map_location=self.device))
+                logger.info("Loaded UTKFace pretrained gender weights")
+            except Exception as e:
+                logger.warning(f"Could not load pretrained weights: {e}, using ImageNet weights")
+        else:
+            logger.info("Using ImageNet pretrained weights (fine-tuning recommended for gender)")
         
         # Move to device
-        model = model.to(self.device)
+        base_model = base_model.to(self.device)
         
-        logger.info("Using MobileNetV2 for face-based gender classification")
+        logger.info("MobileNetV2 initialized for face-based gender classification")
         
-        return model
+        return base_model
     
     def classify(self, face_crop: np.ndarray) -> Tuple[str, float]:
         """
@@ -123,8 +132,9 @@ class FaceGenderClassifier:
     
     def release(self) -> None:
         """Release resources."""
-        if self.model is not None:
+        if hasattr(self, 'model') and self.model is not None:
             del self.model
+            self.model = None
         logger.debug("FaceGenderClassifier resources released")
 
 
