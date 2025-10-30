@@ -7,9 +7,10 @@ Provides an abstraction for generating normalized embeddings from person crops.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Optional, Tuple
-import logging
+
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -84,5 +85,3 @@ class ReIDEmbedder:
         tensor = self._preprocess(crop)
         embedding = self._forward_model(tensor)
         return self._l2_normalize(embedding)
-
-

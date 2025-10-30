@@ -17,7 +17,10 @@ def _percentile(values: List[float], p: float) -> float:
     if not values:
         return 0.0
     values_sorted = sorted(values)
-    k = max(0, min(len(values_sorted) - 1, int(round((p / 100.0) * (len(values_sorted) - 1)))))
+    k = max(
+        0,
+        min(len(values_sorted) - 1, int(round((p / 100.0) * (len(values_sorted) - 1)))),
+    )
     return values_sorted[k]
 
 
@@ -77,7 +80,11 @@ class GenderMetrics:
         with self._lock:
             p50 = _percentile(self.latencies_ms, 50)
             p95 = _percentile(self.latencies_ms, 95)
-            coverage = (self.results_total / self.calls_total) * 100.0 if self.calls_total else 0.0
+            coverage = (
+                (self.results_total / self.calls_total) * 100.0
+                if self.calls_total
+                else 0.0
+            )
             return {
                 "calls_total": float(self.calls_total),
                 "calls_per_frame": float(self.calls_per_frame),
@@ -94,5 +101,3 @@ class GenderMetrics:
                 "gender_F": float(self.gender_counts.get("F", 0)),
                 "gender_U": float(self.gender_counts.get("Unknown", 0)),
             }
-
-

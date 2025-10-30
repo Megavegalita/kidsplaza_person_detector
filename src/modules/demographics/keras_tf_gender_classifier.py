@@ -121,8 +121,10 @@ class KerasTFGenderClassifier:
             class_0_prob = float(outputs[0])
             class_1_prob = float(outputs[1])
             
-            # Mapping: class_0_prob > class_1_prob → M, else → F
-            # This mapping produces M:4, F:70 which you confirmed is CORRECT
+            # Mapping: Based on conf0.4_vote25 results M:60, F:14
+            # Video shows M and F are reversed, need to swap back
+            # class_0_prob > class_1_prob should give: M
+            # class_0_prob <= class_1_prob should give: F
             if class_0_prob > class_1_prob:
                 gender = 'M'  # class_0 -> Male
                 confidence = class_0_prob

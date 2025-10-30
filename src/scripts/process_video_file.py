@@ -27,6 +27,7 @@ from modules.reid import (
     ReIDCache,
     integrate_reid_for_tracks,
 )
+from modules.reid.arcface_embedder import ArcFaceEmbedder
 from modules.demographics import GenderClassifier
 from modules.demographics.async_worker import AsyncGenderWorker
 from modules.demographics.metrics import GenderMetrics
@@ -48,14 +49,17 @@ class VideoProcessor:
         self,
         model_path: str = "yolov8n.pt",
         output_dir: str = "output/videos",
+        run_id: Optional[str] = None,
         conf_threshold: float = 0.5,
         tracker_max_age: int = 30,
         tracker_min_hits: int = 3,
         tracker_iou_threshold: float = 0.3,
         tracker_ema_alpha: float = 0.5,
         reid_enable: bool = False,
+        reid_use_face: bool = False,
         reid_every_k: int = 10,
         reid_ttl_seconds: int = 60,
+        reid_similarity_threshold: float = 0.65,
         gender_enable: bool = False,
         gender_every_k: int = 20,
         gender_model_type: str = 'timm_mobile',
@@ -66,6 +70,9 @@ class VideoProcessor:
         gender_min_confidence: float = 0.5,
         gender_voting_window: int = 10,
         gender_enable_face_detection: bool = False,
+        reid_max_embeddings: int = 1,
+        reid_append_mode: bool = False,
+        reid_aggregation_method: str = 'single',
     ) -> None:
         """
         Initialize video processor.
@@ -75,7 +82,13 @@ class VideoProcessor:
             output_dir: Output directory for results
             conf_threshold: Detection confidence threshold
         """
-        self.output_dir = Path(output_dir)
+        base_output = Path(output_dir)
+        base_output.mkdir(parents=True, exist_ok=True)
+        # create per-run directory
+        if run_id is None:
+            import datetime as _dt
+            run_id = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.output_dir = base_output / str(run_id)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         self.conf_threshold = conf_threshold
@@ -91,14 +104,30 @@ class VideoProcessor:
             max_age=tracker_max_age,
             min_hits=tracker_min_hits,
             iou_threshold=tracker_iou_threshold,
-            ema_alpha=tracker_ema_alpha
+            ema_alpha=tracker_ema_alpha,
+            reid_enable=reid_enable,
+            reid_similarity_threshold=reid_similarity_threshold,
+            reid_cache=None,  # set after cache init
+            reid_embedder=None,  # set after embedder init
+            reid_aggregation_method=reid_aggregation_method,
         )
         
         # Initialize Re-ID components (optional)
         self.reid_enable = reid_enable
         self.reid_every_k = reid_every_k
         self.reid_cache = ReIDCache(ttl_seconds=reid_ttl_seconds) if reid_enable else None
-        self.reid_embedder = ReIDEmbedder() if reid_enable else None
+        if reid_enable:
+            self.reid_embedder = ArcFaceEmbedder() if reid_use_face else ReIDEmbedder()
+        else:
+            self.reid_embedder = None
+        # Wire Re-ID components into tracker if enabled
+        if reid_enable:
+            self.tracker._reid_cache = self.reid_cache
+            self.tracker._reid_embedder = self.reid_embedder
+        self.reid_similarity_threshold = reid_similarity_threshold
+        self.reid_max_embeddings = reid_max_embeddings
+        self.reid_append_mode = reid_append_mode
+        self.reid_aggregation_method = reid_aggregation_method
 
         # Initialize Gender components (optional)
         self.gender_enable = gender_enable
@@ -137,7 +166,8 @@ class VideoProcessor:
         gender_counts: Optional[Dict[str, int]],
         elapsed_time: float,
         device: str,
-        mps_enabled: bool
+        mps_enabled: bool,
+        reid_matches: int = 0,
     ) -> np.ndarray:
         """
         Add information overlay to frame.
@@ -189,6 +219,10 @@ class VideoProcessor:
         y_offset += 25
         
         cv2.putText(frame, f"Unique: {unique_count}", (10, y_offset), 
+                   font, font_scale, text_color, font_thickness)
+        y_offset += 25
+
+        cv2.putText(frame, f"ReID matches: {int(reid_matches)}", (10, y_offset),
                    font, font_scale, text_color, font_thickness)
         y_offset += 25
 
@@ -323,7 +357,7 @@ class VideoProcessor:
             detections, annotated = self.detector.detect(frame, return_image=True)
             
             # Run tracking - tracker now returns detections with track_id attached
-            tracked_detections = self.tracker.update(detections)
+            tracked_detections = self.tracker.update(detections, frame=frame, session_id=session_id)
             
             # Use tracked_detections which already have track_id attached
             detections = tracked_detections
@@ -339,6 +373,11 @@ class VideoProcessor:
                         session_id=session_id,
                         every_k_frames=self.reid_every_k,
                         frame_index=frame_num,
+                        max_per_frame=5,
+                        min_interval_frames=30,
+                        max_embeddings=self.reid_max_embeddings,
+                        append_mode=self.reid_append_mode,
+                        aggregation_method=self.reid_aggregation_method,
                     )
                 except Exception as e:
                     logger.warning(f"Re-ID integration error: {e}")
@@ -497,13 +536,17 @@ class VideoProcessor:
             if save_annotated:
                 tracked_count = len([d for d in detections if d.get('track_id') is not None])
                 unique_count = len(unique_track_ids)
+                # Fetch tracker stats (including reid_matches)
+                tracker_stats = self.tracker.get_statistics()
+                reid_matches = int(tracker_stats.get('reid_matches', 0))
                 if annotated is not None:
                     annotated = self._add_overlay(
                         annotated, frame_num, len(detections), tracked_count, unique_count,
                         gender_counts,
                         time.time() - start_time,
                         self.detector.model_loader.get_device(),
-                        self.detector.model_loader.is_mps_enabled()
+                        self.detector.model_loader.is_mps_enabled(),
+                        reid_matches,
                     )
                 else:
                     annotated = self._add_overlay(
@@ -511,7 +554,8 @@ class VideoProcessor:
                         gender_counts,
                         time.time() - start_time,
                         self.detector.model_loader.get_device(),
-                        self.detector.model_loader.is_mps_enabled()
+                        self.detector.model_loader.is_mps_enabled(),
+                        reid_matches,
                     )
                 
                 video_writer.write(annotated)
@@ -551,6 +595,7 @@ class VideoProcessor:
                 'avg_time_per_frame_ms': (processing_time / frame_num) * 1000 if frame_num > 0 else 0
             },
             'detector_stats': self.detector.get_statistics(),
+            'tracker_stats': self.tracker.get_statistics(),
             'frame_results': frame_results,
             'summary': {
                 'unique_tracks_total': len(unique_track_ids),
@@ -597,6 +642,12 @@ def main():
         type=str,
         default='output/videos',
         help='Output directory (default: output/videos)'
+    )
+    parser.add_argument(
+        '--run-id',
+        type=str,
+        default=None,
+        help='Optional run id to group outputs under output/run-id/'
     )
     
     parser.add_argument(
@@ -647,6 +698,12 @@ def main():
     )
 
     parser.add_argument(
+        '--reid-use-face',
+        action='store_true',
+        help='Use ArcFace face-based embeddings for Re-ID when available'
+    )
+
+    parser.add_argument(
         '--reid-every-k',
         type=int,
         default=10,
@@ -658,6 +715,32 @@ def main():
         type=int,
         default=60,
         help='TTL seconds for Re-ID cache entries (default: 60)'
+    )
+
+    parser.add_argument(
+        '--reid-similarity-threshold',
+        type=float,
+        default=0.65,
+        help='Cosine similarity threshold for Re-ID matching (default: 0.65)'
+    )
+
+    parser.add_argument(
+        '--reid-max-embeddings',
+        type=int,
+        default=1,
+        help='Max embeddings to keep per track when appending (default: 1)'
+    )
+    parser.add_argument(
+        '--reid-append-mode',
+        action='store_true',
+        help='Append new embeddings instead of overwriting (default: False)'
+    )
+    parser.add_argument(
+        '--reid-aggregation-method',
+        type=str,
+        default='single',
+        choices=['single','max','mean','avg_sim'],
+        help='Aggregation method for multi-embedding similarity'
     )
 
     parser.add_argument(
@@ -753,6 +836,7 @@ def main():
         processor = VideoProcessor(
             model_path=args.model,
             output_dir=args.output,
+            run_id=args.run_id,
             conf_threshold=args.conf_threshold,
             tracker_max_age=args.tracker_max_age,
             tracker_min_hits=args.tracker_min_hits,
@@ -761,16 +845,21 @@ def main():
             reid_enable=bool(args.reid_enable),
             reid_every_k=args.reid_every_k,
             reid_ttl_seconds=args.reid_ttl_seconds,
+            reid_similarity_threshold=args.reid_similarity_threshold,
+            reid_use_face=bool(args.reid_use_face),
             gender_enable=bool(args.gender_enable),
             gender_every_k=args.gender_every_k,
-                gender_model_type=args.gender_model_type,
-                gender_max_per_frame=args.gender_max_per_frame,
-                gender_timeout_ms=args.gender_timeout_ms,
-                gender_queue_size=args.gender_queue_size,
-                gender_workers=args.gender_workers,
-                gender_min_confidence=args.gender_min_confidence,
-                gender_voting_window=args.gender_voting_window,
-                gender_enable_face_detection=args.gender_enable_face_detection,
+            gender_model_type=args.gender_model_type,
+            gender_max_per_frame=args.gender_max_per_frame,
+            gender_timeout_ms=args.gender_timeout_ms,
+            gender_queue_size=args.gender_queue_size,
+            gender_workers=args.gender_workers,
+            gender_min_confidence=args.gender_min_confidence,
+            gender_voting_window=args.gender_voting_window,
+            gender_enable_face_detection=args.gender_enable_face_detection,
+            reid_max_embeddings=args.reid_max_embeddings,
+            reid_append_mode=bool(args.reid_append_mode),
+            reid_aggregation_method=args.reid_aggregation_method,
         )
         
         try:

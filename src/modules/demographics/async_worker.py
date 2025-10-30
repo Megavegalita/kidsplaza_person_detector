@@ -17,7 +17,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
-from queue import PriorityQueue, Full, Empty
+from queue import Empty, Full, PriorityQueue
 from typing import Callable, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -45,7 +45,9 @@ class AsyncGenderWorker:
         self._results_lock = threading.Lock()
         self._shutdown = threading.Event()
         self._workers = [
-            threading.Thread(target=self._run_loop, name=f"gender-worker-{i}", daemon=True)
+            threading.Thread(
+                target=self._run_loop, name=f"gender-worker-{i}", daemon=True
+            )
             for i in range(max_workers)
         ]
         self._task_timeout_ms = max(1, task_timeout_ms)
@@ -60,7 +62,9 @@ class AsyncGenderWorker:
             self._task_timeout_ms,
         )
 
-    def enqueue(self, task_id: str, priority: int, func: Callable[[], Tuple[str, float]]) -> bool:
+    def enqueue(
+        self, task_id: str, priority: int, func: Callable[[], Tuple[str, float]]
+    ) -> bool:
         """Enqueue a classification task.
 
         Args:
@@ -73,7 +77,12 @@ class AsyncGenderWorker:
         """
         try:
             self._queue.put_nowait(
-                _QueuedTask(priority=priority, enqueued_at=time.time(), task_id=task_id, func=func)
+                _QueuedTask(
+                    priority=priority,
+                    enqueued_at=time.time(),
+                    task_id=task_id,
+                    func=func,
+                )
             )
             return True
         except Full:
@@ -123,5 +132,3 @@ class AsyncGenderWorker:
                 self._queue.task_done()
             except Empty:
                 break
-
-

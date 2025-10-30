@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Re-ID module package initialization."""
 
-from .embedder import ReIDEmbedder, ReIDConfig
 from .cache import ReIDCache, ReIDCacheItem
+from .embedder import ReIDConfig, ReIDEmbedder
 from .integrator import integrate_reid_for_tracks
 
 __all__ = [
@@ -12,5 +12,3 @@ __all__ = [
     "ReIDCacheItem",
     "integrate_reid_for_tracks",
 ]
-
-

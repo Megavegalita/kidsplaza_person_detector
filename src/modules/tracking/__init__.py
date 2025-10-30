@@ -7,5 +7,4 @@ Handles multi-object tracking for detected persons.
 
 from .tracker import Tracker
 
-__all__ = ['Tracker']
-
+__all__ = ["Tracker"]

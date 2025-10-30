@@ -35,6 +35,9 @@ def integrate_reid_for_tracks(
     max_per_frame: int = 5,
     min_interval_frames: int = 30,
     iou_tie_margin: float = 0.1,
+    max_embeddings: int = 1,
+    append_mode: bool = False,
+    aggregation_method: str = "single",
 ) -> None:
     """
     Compute and cache embeddings for tracked detections at a reduced frequency.
@@ -83,9 +86,28 @@ def integrate_reid_for_tracks(
             if crop is None:
                 continue
             emb = embedder.embed(crop)
+            # Multi-embedding support: append up to max_embeddings if requested
+            embeddings_list = None
+            if append_mode and max_embeddings > 1:
+                prev = cache.get(session_id, int(track_id))
+                existing = []
+                if prev is not None and prev.embeddings:
+                    existing = prev.embeddings
+                elif prev is not None and prev.embedding is not None and prev.embedding.size > 0:
+                    existing = [prev.embedding.tolist()]
+                existing.append(emb.tolist())
+                # keep only most recent max_embeddings
+                embeddings_list = existing[-int(max_embeddings) :]
+
             cache.set(
                 session_id,
-                ReIDCacheItem(track_id=int(track_id), embedding=emb, updated_at=time.time()),
+                ReIDCacheItem(
+                    track_id=int(track_id),
+                    embedding=emb,
+                    updated_at=time.time(),
+                    embeddings=embeddings_list,
+                    aggregation_method=aggregation_method,
+                ),
             )
             embeds_done += 1
     except Exception as e:

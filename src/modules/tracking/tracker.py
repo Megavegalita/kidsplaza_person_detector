@@ -63,7 +63,12 @@ class Tracker:
         max_age: int = 30,
         min_hits: int = 3,
         iou_threshold: float = 0.3,
-        ema_alpha: float = 0.5
+        ema_alpha: float = 0.5,
+        reid_enable: bool = False,
+        reid_similarity_threshold: float = 0.65,
+        reid_cache: Optional[object] = None,
+        reid_embedder: Optional[object] = None,
+        reid_aggregation_method: str = "single",
     ) -> None:
         """
         Initialize tracker.
@@ -78,6 +83,13 @@ class Tracker:
         self.min_hits = min_hits
         self.iou_threshold = iou_threshold
         self.ema_alpha = ema_alpha
+        # Re-ID params
+        self.reid_enable = bool(reid_enable)
+        self.reid_similarity_threshold = float(reid_similarity_threshold)
+        self._reid_cache = reid_cache
+        self._reid_embedder = reid_embedder
+        self._reid_aggregation_method = reid_aggregation_method
+        self._reid_matches: int = 0
         
         self.tracks: List[Track] = []
         self.next_id = 1
@@ -138,7 +150,7 @@ class Tracker:
         # Else treat as xywh
         return np.array([x1, y1, x1 + x2, y1 + y2], dtype=np.float32)
     
-    def update(self, detections: List[Dict]) -> List[Dict]:
+    def update(self, detections: List[Dict], frame: Optional[np.ndarray] = None, session_id: Optional[str] = None) -> List[Dict]:
         """
         Update tracker with new detections.
         
@@ -190,18 +202,52 @@ class Tracker:
             bbox = self._convert_detection(detections[d_idx])
             track.update(bbox, detections[d_idx]['confidence'], self.ema_alpha)
         
-        # Handle unmatched detections (create new tracks)
-        for d_idx in unmatched_detections:
+        # Handle unmatched detections (try Re-ID match; else create new track)
+        for d_idx in list(unmatched_detections):
             bbox = self._convert_detection(detections[d_idx])
-            track = Track(
-                track_id=self.next_id,
-                bbox=bbox,
-                confidence=detections[d_idx]['confidence'],
-                class_name=detections[d_idx].get('class_name', 'person')
-            )
-            track.hits = self.min_hits  # Start confirmed
-            self.tracks.append(track)
-            self.next_id += 1
+            assigned = False
+            if self.reid_enable and self._reid_cache is not None and self._reid_embedder is not None and frame is not None and session_id:
+                try:
+                    xi1, yi1, xi2, yi2 = map(int, bbox.tolist())
+                    xi1 = max(0, xi1)
+                    yi1 = max(0, yi1)
+                    xi2 = max(xi1 + 1, xi2)
+                    yi2 = max(yi1 + 1, yi2)
+                    crop = frame[yi1:yi2, xi1:xi2].copy()
+                    if crop.size > 0:
+                        det_emb = self._reid_embedder.embed(crop)
+                        # Compare against existing tracks' cached embeddings
+                        best_sim = -1.0
+                        best_t_idx: Optional[int] = None
+                        for t_idx, track in enumerate(self.tracks):
+                            cached = self._reid_cache.get(session_id, int(track.track_id))
+                            if cached is None:
+                                continue
+                            sim = self._compute_reid_similarity(det_emb, cached, self._reid_aggregation_method)
+                            if sim > best_sim:
+                                best_sim = sim
+                                best_t_idx = t_idx
+                        if best_t_idx is not None and best_sim >= self.reid_similarity_threshold:
+                            # Assign this detection to the best track
+                            track = self.tracks[best_t_idx]
+                            track.update(bbox, detections[d_idx]['confidence'], self.ema_alpha)
+                            matched_tracks.add(best_t_idx)
+                            matched_indices.append((d_idx, best_t_idx))
+                            unmatched_detections.discard(d_idx)
+                            assigned = True
+                            self._reid_matches += 1
+                except Exception:
+                    assigned = False
+            if not assigned:
+                track = Track(
+                    track_id=self.next_id,
+                    bbox=bbox,
+                    confidence=detections[d_idx]['confidence'],
+                    class_name=detections[d_idx].get('class_name', 'person')
+                )
+                track.hits = self.min_hits  # Start confirmed
+                self.tracks.append(track)
+                self.next_id += 1
         
         # Remove old tracks
         self.tracks = [
@@ -211,6 +257,46 @@ class Tracker:
         
         # Return tracked detections with track_id attached
         return self._attach_track_ids_to_detections(detections, matched_indices)
+
+    @staticmethod
+    def _cosine_similarity(a: np.ndarray, b: np.ndarray, eps: float = 1e-9) -> float:
+        denom = float(np.linalg.norm(a) * np.linalg.norm(b))
+        if denom < eps:
+            return 0.0
+        return float(np.dot(a, b) / denom)
+
+    def _compute_reid_similarity(self, det_emb: np.ndarray, cached_item: object, method: str) -> float:
+        try:
+            embs: List[np.ndarray] = []
+            # collect embeddings from cache
+            if getattr(cached_item, "embeddings", None):
+                for e in cached_item.embeddings:  # type: ignore[attr-defined]
+                    arr = np.array(e, dtype=np.float32)
+                    if arr.ndim == 1 and arr.size > 0:
+                        embs.append(arr)
+            base = getattr(cached_item, "embedding", None)
+            if base is not None and isinstance(base, np.ndarray) and base.size > 0:
+                embs.append(base)
+            if len(embs) == 0:
+                return 0.0
+            method = (method or "single").lower()
+            if method == "single":
+                return self._cosine_similarity(det_emb, embs[-1])
+            if method == "max":
+                return max(self._cosine_similarity(det_emb, e) for e in embs)
+            if method == "mean":
+                mean_emb = np.mean(np.stack(embs, axis=0), axis=0).astype(np.float32)
+                # normalize mean
+                n = float(np.linalg.norm(mean_emb))
+                if n > 0:
+                    mean_emb = (mean_emb / n).astype(np.float32)
+                return self._cosine_similarity(det_emb, mean_emb)
+            if method == "avg_sim":
+                sims = [self._cosine_similarity(det_emb, e) for e in embs]
+                return float(np.mean(sims)) if len(sims) > 0 else 0.0
+            return self._cosine_similarity(det_emb, embs[-1])
+        except Exception:
+            return 0.0
     
     def _compute_cost_matrix(self, detections: List[Dict]) -> np.ndarray:
         """Compute IoU cost matrix between detections and tracks."""
@@ -344,7 +430,8 @@ class Tracker:
             'confirmed_tracks': len([t for t in self.tracks if t.hits >= self.min_hits]),
             'next_id': self.next_id,
             'max_age': self.max_age,
-            'min_hits': self.min_hits
+            'min_hits': self.min_hits,
+            'reid_matches': int(self._reid_matches),
         }
 
 

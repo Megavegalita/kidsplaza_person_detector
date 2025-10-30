@@ -6,7 +6,7 @@ Redis-backed cache for Re-ID embeddings per track.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, List, Dict, Any
 import json
 import logging
 import os
@@ -22,6 +22,9 @@ class ReIDCacheItem:
     track_id: int
     embedding: np.ndarray
     updated_at: float
+    # Optional multi-embedding support
+    embeddings: Optional[List[List[float]]] = None
+    aggregation_method: str = "single"
 
 
 class ReIDCache:
@@ -51,11 +54,15 @@ class ReIDCache:
     def set(self, session_id: str, item: ReIDCacheItem) -> None:
         if self._client is None:
             return
-        payload = {
+        payload: Dict[str, Any] = {
             "track_id": item.track_id,
-            "embedding": item.embedding.tolist(),
+            "embedding": item.embedding.tolist() if item.embedding is not None else None,
             "updated_at": item.updated_at,
         }
+        if item.embeddings is not None:
+            payload["embeddings"] = item.embeddings
+        if item.aggregation_method:
+            payload["aggregation_method"] = item.aggregation_method
         try:
             self._client.setex(
                 self._key(session_id, item.track_id), self.ttl_seconds, json.dumps(payload)
@@ -71,11 +78,17 @@ class ReIDCache:
             if not raw:
                 return None
             data = json.loads(raw)
-            return ReIDCacheItem(
+            embeddings_list = data.get("embeddings")
+            item = ReIDCacheItem(
                 track_id=int(data["track_id"]),
-                embedding=np.array(data["embedding"], dtype=np.float32),
-                updated_at=float(data["updated_at"]),
+                embedding=np.array(data.get("embedding", []), dtype=np.float32)
+                if data.get("embedding") is not None
+                else np.array([], dtype=np.float32),
+                updated_at=float(data.get("updated_at", 0.0)),
+                embeddings=embeddings_list if isinstance(embeddings_list, list) else None,
+                aggregation_method=str(data.get("aggregation_method", "single")),
             )
+            return item
         except Exception as e:
             logger.warning("ReIDCache.get failed: %s", e)
             return None

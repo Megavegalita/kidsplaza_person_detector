@@ -2,5 +2,4 @@
 
 from .gender_classifier import GenderClassifier
 
-__all__ = ['GenderClassifier']
-
+__all__ = ["GenderClassifier"]
