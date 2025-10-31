@@ -32,6 +32,9 @@ from modules.reid import (ReIDCache, ReIDEmbedder,  # noqa: E402
                           integrate_reid_for_tracks)
 from modules.reid.arcface_embedder import ArcFaceEmbedder  # noqa: E402
 from modules.tracking.tracker import Tracker  # noqa: E402
+from modules.database.models import PersonDetection  # noqa: E402
+from modules.database.postgres_manager import PostgresManager  # noqa: E402
+from modules.database.redis_manager import RedisManager  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -77,6 +80,12 @@ class VideoProcessor:
         reid_max_embeddings: int = 1,
         reid_append_mode: bool = False,
         reid_aggregation_method: str = "single",
+        db_enable: bool = False,
+        db_dsn: Optional[str] = None,
+        db_batch_size: int = 100,
+        db_flush_interval_ms: int = 500,
+        redis_enable: bool = False,
+        redis_url: Optional[str] = None,
     ) -> None:
         """
         Initialize video processor.
@@ -133,6 +142,32 @@ class VideoProcessor:
         self.reid_max_embeddings = reid_max_embeddings
         self.reid_append_mode = reid_append_mode
         self.reid_aggregation_method = reid_aggregation_method
+
+        # Database/Redis integration
+        self.db_enable = bool(db_enable)
+        self.db_batch_size = int(db_batch_size)
+        self.db_flush_interval_ms = int(db_flush_interval_ms)
+        self.db_manager: Optional[PostgresManager] = None
+        if self.db_enable and db_dsn:
+            try:
+                self.db_manager = PostgresManager(dsn=db_dsn)
+            except Exception as e:
+                logger.warning("DB init failed: %s", e)
+                self.db_manager = None
+                self.db_enable = False
+        self.redis_enable = bool(redis_enable)
+        self.redis_manager: Optional[RedisManager] = None
+        if self.redis_enable and redis_url:
+            try:
+                self.redis_manager = RedisManager(url=redis_url)
+            except Exception as e:
+                logger.warning("Redis init failed: %s", e)
+                self.redis_manager = None
+                self.redis_enable = False
+
+        # DB buffering
+        self._db_buffer: List[PersonDetection] = []
+        self._last_db_flush_ms: float = time.time() * 1000.0
 
         # Initialize Gender components (optional)
         self.gender_enable = gender_enable
@@ -698,6 +733,45 @@ class VideoProcessor:
                 }
             )
 
+            # DB buffering: convert current frame detections to PersonDetection rows
+            if self.db_enable and self.db_manager is not None:
+                now_ts = datetime.now()
+                for idx, d in enumerate(detections):
+                    t_id = d.get("track_id")
+                    bbox = d.get("bbox")
+                    x1 = y1 = x2 = y2 = 0
+                    if isinstance(bbox, (list, tuple)) and len(bbox) >= 4:
+                        x1, y1, x2, y2 = [int(b) for b in bbox[:4]]
+                    det = PersonDetection(
+                        timestamp=now_ts,
+                        camera_id=0,
+                        channel_id=0,
+                        detection_id=f"{session_id}:{frame_num}:{idx}",
+                        track_id=int(t_id) if t_id is not None else None,
+                        confidence=float(d.get("confidence", 0.0)),
+                        bbox=(x1, y1, max(0, x2 - x1), max(0, y2 - y1)),
+                        gender=d.get("gender"),
+                        gender_confidence=float(d.get("gender_confidence", 0.0))
+                        if d.get("gender_confidence") is not None
+                        else None,
+                        frame_number=frame_num,
+                    )
+                    self._db_buffer.append(det)
+
+                # Flush policy: by batch size or time interval
+                now_ms = time.time() * 1000.0
+                if (
+                    len(self._db_buffer) >= self.db_batch_size
+                    or (now_ms - self._last_db_flush_ms) >= self.db_flush_interval_ms
+                ):
+                    try:
+                        inserted = self.db_manager.insert_detections(self._db_buffer)
+                        logger.debug("DB flush inserted=%d", inserted)
+                    except Exception as e:
+                        logger.warning("DB flush failed: %s", e)
+                    self._db_buffer.clear()
+                    self._last_db_flush_ms = now_ms
+
             # Redraw annotations with track IDs if needed
             if annotated is None and len(detections) > 0:
                 annotated = self.detector.processor.draw_detections(frame, detections)
@@ -800,6 +874,15 @@ class VideoProcessor:
 
         logger.info(f"Processing complete in {processing_time:.2f}s")
         logger.info(f"Report saved: {report_path}")
+
+        # Final DB flush
+        if self.db_enable and self.db_manager is not None and len(self._db_buffer) > 0:
+            try:
+                inserted = self.db_manager.insert_detections(self._db_buffer)
+                logger.info("Final DB flush inserted=%d", inserted)
+            except Exception as e:
+                logger.warning("Final DB flush failed: %s", e)
+            self._db_buffer.clear()
 
         return report
 
@@ -926,6 +1009,21 @@ def main():
         choices=["single", "max", "mean", "avg_sim"],
         help="Aggregation method for multi-embedding similarity",
     )
+
+    # Database/Redis flags
+    parser.add_argument("--db-enable", action="store_true", help="Enable PostgreSQL writes")
+    parser.add_argument("--db-dsn", type=str, default=None, help="PostgreSQL DSN string")
+    parser.add_argument(
+        "--db-batch-size", type=int, default=100, help="Batch size for insert (default: 100)"
+    )
+    parser.add_argument(
+        "--db-flush-interval-ms",
+        type=int,
+        default=500,
+        help="Flush interval in ms for DB buffer (default: 500)",
+    )
+    parser.add_argument("--redis-enable", action="store_true", help="Enable Redis cache")
+    parser.add_argument("--redis-url", type=str, default=None, help="Redis URL")
 
     parser.add_argument(
         "--gender-enable",
@@ -1126,6 +1224,12 @@ def main():
             reid_max_embeddings=args.reid_max_embeddings,
             reid_append_mode=bool(args.reid_append_mode),
             reid_aggregation_method=args.reid_aggregation_method,
+            db_enable=bool(args.db_enable),
+            db_dsn=args.db_dsn,
+            db_batch_size=args.db_batch_size,
+            db_flush_interval_ms=args.db_flush_interval_ms,
+            redis_enable=bool(args.redis_enable),
+            redis_url=args.redis_url,
         )
 
         try:
