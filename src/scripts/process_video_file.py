@@ -69,7 +69,14 @@ class VideoProcessor:
         gender_workers: int = 2,
         gender_min_confidence: float = 0.5,
         gender_voting_window: int = 10,
+        gender_female_min_confidence: Optional[float] = None,
+        gender_male_min_confidence: Optional[float] = None,
         gender_enable_face_detection: bool = False,
+        gender_face_every_k: int = 5,
+        gender_cache_ttl_frames: int = 90,
+        gender_adaptive_enabled: bool = False,
+        gender_queue_high_watermark: int = 200,
+        gender_queue_low_watermark: int = 100,
         reid_max_embeddings: int = 1,
         reid_append_mode: bool = False,
         reid_aggregation_method: str = 'single',
@@ -134,15 +141,26 @@ class VideoProcessor:
         self.gender_every_k = gender_every_k
         self.gender_enable_face_detection = gender_enable_face_detection
         self.gender_classifier = (
-            GenderClassifier(model_type=gender_model_type, min_confidence=gender_min_confidence, voting_window=gender_voting_window) if gender_enable else None
+            GenderClassifier(
+                model_type=gender_model_type,
+                min_confidence=gender_min_confidence,
+                voting_window=gender_voting_window,
+                female_min_confidence=gender_female_min_confidence,
+                male_min_confidence=gender_male_min_confidence,
+            )
+            if gender_enable
+            else None
         )
         self.face_detector = (
             FaceDetector(min_detection_confidence=0.5) if (gender_enable and gender_enable_face_detection) else None
         )
-        # Use your trained Keras model for best accuracy
-        self.face_gender_classifier = (
-            KerasTFGenderClassifier(min_confidence=gender_min_confidence) if (gender_enable and gender_enable_face_detection) else None
-        )
+        # Use Keras model if available; otherwise fallback to None (will use person classifier)
+        self.face_gender_classifier = None
+        if gender_enable and gender_enable_face_detection:
+            try:
+                self.face_gender_classifier = KerasTFGenderClassifier(min_confidence=gender_min_confidence)
+            except ImportError:
+                logger.warning("TensorFlow not available; skipping KerasTFGenderClassifier")
         self.gender_worker = (
             AsyncGenderWorker(max_workers=gender_workers, queue_size=gender_queue_size, task_timeout_ms=gender_timeout_ms)
             if gender_enable
@@ -151,6 +169,15 @@ class VideoProcessor:
         self.gender_metrics = GenderMetrics() if gender_enable else None
         self.gender_max_per_frame = gender_max_per_frame
         self._pending_gender_tasks = []  # list of task_ids for polling results
+        # Face/gender caches and scheduling
+        self.gender_face_every_k = max(1, int(gender_face_every_k))
+        self.gender_cache_ttl_frames = max(1, int(gender_cache_ttl_frames))
+        self._face_bbox_cache: Dict[int, Dict[str, float]] = {}
+        self._face_bbox_cache_frame: Dict[int, int] = {}
+        # Adaptive sampling controls
+        self.gender_adaptive_enabled = bool(gender_adaptive_enabled)
+        self.gender_queue_high_watermark = int(gender_queue_high_watermark)
+        self.gender_queue_low_watermark = int(gender_queue_low_watermark)
         
         logger.info(f"Video processor initialized")
         logger.info(f"Device: {self.detector.model_loader.get_device()}")
@@ -415,11 +442,27 @@ class VideoProcessor:
                         pass
                 self._pending_gender_tasks = new_pending
 
-                # Only enqueue every K frames
-                if frame_num % self.gender_every_k == 0:
+                # Determine effective sampling based on queue pressure (adaptive)
+                eff_every_k = self.gender_every_k
+                eff_max_per_frame = self.gender_max_per_frame
+                qlen = 0
+                try:
+                    qlen = self.gender_worker.get_queue_size()
+                except Exception:
+                    qlen = len(self._pending_gender_tasks)
+                if self.gender_adaptive_enabled:
+                    if qlen >= self.gender_queue_high_watermark:
+                        eff_every_k = max(self.gender_every_k, self.gender_every_k * 2)
+                        eff_max_per_frame = max(1, min(self.gender_max_per_frame, 2))
+                    elif qlen <= self.gender_queue_low_watermark:
+                        eff_every_k = self.gender_every_k
+                        eff_max_per_frame = self.gender_max_per_frame
+
+                # Only enqueue every K frames (effective)
+                if frame_num % eff_every_k == 0:
                     enqueued_this_frame = 0
                     for d in detections:
-                        if enqueued_this_frame >= self.gender_max_per_frame:
+                        if enqueued_this_frame >= eff_max_per_frame:
                             break
                         if d.get('track_id') is None:
                             continue
@@ -438,15 +481,27 @@ class VideoProcessor:
                         # Crop strategy: face detection or upper-body fallback
                         person_crop = frame[yi1:yi2, xi1:xi2].copy()
                         
-                        # Try face detection if enabled
+                        # Try face detection if enabled (scheduled + cached)
                         crop = None
                         use_face_classifier = False
                         if self.gender_enable_face_detection and self.face_detector is not None:
-                            face_result = self.face_detector.detect_face(person_crop)
-                            if face_result is not None:
-                                face_bbox_rel, face_conf = face_result
-                                crop = self.face_detector.crop_face(person_crop, face_bbox_rel)
-                                use_face_classifier = True
+                            t_id_int_tmp = int(d['track_id'])
+                            do_detect_face = (frame_num % self.gender_face_every_k == 0)
+                            if not do_detect_face:
+                                # use cached face bbox if fresh
+                                last_frame = self._face_bbox_cache_frame.get(t_id_int_tmp, -10**9)
+                                if (frame_num - last_frame) <= self.gender_cache_ttl_frames and t_id_int_tmp in self._face_bbox_cache:
+                                    face_bbox_rel = self._face_bbox_cache[t_id_int_tmp]
+                                    crop = self.face_detector.crop_face(person_crop, face_bbox_rel)
+                                    use_face_classifier = True if crop is not None and crop.size > 0 else False
+                            if do_detect_face or (crop is None or crop.size == 0):
+                                face_result = self.face_detector.detect_face(person_crop)
+                                if face_result is not None:
+                                    face_bbox_rel, face_conf = face_result
+                                    self._face_bbox_cache[t_id_int_tmp] = face_bbox_rel
+                                    self._face_bbox_cache_frame[t_id_int_tmp] = frame_num
+                                    crop = self.face_detector.crop_face(person_crop, face_bbox_rel)
+                                    use_face_classifier = True
                         
                         # Fallback to upper-body crop
                         if crop is None or crop.size == 0:
@@ -800,9 +855,50 @@ def main():
         help='Voting window size for gender stability (default: 25)'
     )
     parser.add_argument(
+        '--gender-female-min-confidence',
+        type=float,
+        default=None,
+        help='Optional female-specific minimum confidence threshold (overrides generic)'
+    )
+    parser.add_argument(
+        '--gender-male-min-confidence',
+        type=float,
+        default=None,
+        help='Optional male-specific minimum confidence threshold (overrides generic)'
+    )
+    parser.add_argument(
         '--gender-enable-face-detection',
         action='store_true',
         help='Use face detection for improved gender accuracy (default: disabled, uses upper-body)'
+    )
+    parser.add_argument(
+        '--gender-face-every-k',
+        type=int,
+        default=5,
+        help='Run face detection every K frames (default: 5)'
+    )
+    parser.add_argument(
+        '--gender-cache-ttl-frames',
+        type=int,
+        default=90,
+        help='TTL in frames for cached face bbox per track (default: 90)'
+    )
+    parser.add_argument(
+        '--gender-adaptive-enabled',
+        action='store_true',
+        help='Enable adaptive sampling based on worker queue length'
+    )
+    parser.add_argument(
+        '--gender-queue-high-watermark',
+        type=int,
+        default=200,
+        help='High watermark for worker queue to increase sampling interval'
+    )
+    parser.add_argument(
+        '--gender-queue-low-watermark',
+        type=int,
+        default=100,
+        help='Low watermark for worker queue to restore sampling interval'
     )
     parser.add_argument(
         '--log-level',
@@ -810,6 +906,13 @@ def main():
         default='INFO',
         choices=['DEBUG','INFO','WARNING','ERROR','CRITICAL'],
         help='Logging level (default: INFO)'
+    )
+    parser.add_argument(
+        '--preset',
+        type=str,
+        default=None,
+        choices=['gender_main_v1'],
+        help='Optional named preset to apply recommended configuration'
     )
     
     args = parser.parse_args()
@@ -826,6 +929,27 @@ def main():
         logging.getLogger('modules.demographics.metrics').setLevel(level)
         logging.getLogger('modules.detection.detector').setLevel(level)
         logging.getLogger('modules.detection.image_processor').setLevel(level)
+
+        # Apply optional presets before constructing processor
+        if args.preset == 'gender_main_v1':
+            # Integrates improve 1_2: gender_e15, voting_window=35, min_conf=0.50, reid optimized
+            args.reid_enable = True
+            args.reid_every_k = 20
+            args.reid_ttl_seconds = 60
+            args.reid_similarity_threshold = 0.65
+            args.reid_aggregation_method = 'avg_sim'
+            args.reid_append_mode = True
+            args.reid_max_embeddings = 3
+
+            args.gender_enable = True
+            args.gender_every_k = 15
+            args.gender_max_per_frame = 4
+            args.gender_model_type = 'timm_mobile'
+            args.gender_min_confidence = 0.50
+            args.gender_voting_window = 35
+            args.gender_adaptive_enabled = True
+            args.gender_queue_high_watermark = 200
+            args.gender_queue_low_watermark = 100
 
         video_path = Path(args.video_path)
         
@@ -856,7 +980,14 @@ def main():
             gender_workers=args.gender_workers,
             gender_min_confidence=args.gender_min_confidence,
             gender_voting_window=args.gender_voting_window,
+            gender_female_min_confidence=args.gender_female_min_confidence,
+            gender_male_min_confidence=args.gender_male_min_confidence,
             gender_enable_face_detection=args.gender_enable_face_detection,
+            gender_face_every_k=args.gender_face_every_k,
+            gender_cache_ttl_frames=args.gender_cache_ttl_frames,
+            gender_adaptive_enabled=bool(args.gender_adaptive_enabled),
+            gender_queue_high_watermark=args.gender_queue_high_watermark,
+            gender_queue_low_watermark=args.gender_queue_low_watermark,
             reid_max_embeddings=args.reid_max_embeddings,
             reid_append_mode=bool(args.reid_append_mode),
             reid_aggregation_method=args.reid_aggregation_method,

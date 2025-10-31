@@ -220,6 +220,9 @@ class Tracker:
                         best_sim = -1.0
                         best_t_idx: Optional[int] = None
                         for t_idx, track in enumerate(self.tracks):
+                            # Do not consider tracks already matched in this frame
+                            if t_idx in matched_tracks:
+                                continue
                             cached = self._reid_cache.get(session_id, int(track.track_id))
                             if cached is None:
                                 continue
@@ -227,7 +230,12 @@ class Tracker:
                             if sim > best_sim:
                                 best_sim = sim
                                 best_t_idx = t_idx
-                        if best_t_idx is not None and best_sim >= self.reid_similarity_threshold:
+                        # Ensure the selected track is not already used
+                        if (
+                            best_t_idx is not None
+                            and best_t_idx not in matched_tracks
+                            and best_sim >= self.reid_similarity_threshold
+                        ):
                             # Assign this detection to the best track
                             track = self.tracks[best_t_idx]
                             track.update(bbox, detections[d_idx]['confidence'], self.ema_alpha)

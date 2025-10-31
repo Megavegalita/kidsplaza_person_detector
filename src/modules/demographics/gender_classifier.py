@@ -13,6 +13,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torchvision import models, transforms
+from .label_mapping import map_logits_to_gender
 
 try:
     import timm
@@ -39,6 +40,8 @@ class GenderClassifier:
         device: Optional[str] = None,
         voting_window: int = 10,  # Increased for better stability
         min_confidence: float = 0.5,
+        female_min_confidence: Optional[float] = None,
+        male_min_confidence: Optional[float] = None,
     ) -> None:
         """
         Initialize gender classifier.
@@ -53,6 +56,8 @@ class GenderClassifier:
         self.voting_window = voting_window
         # Allow configurable min_confidence
         self.min_confidence = min_confidence
+        self.female_min_confidence = female_min_confidence
+        self.male_min_confidence = male_min_confidence
         self.model_type = model_type
 
         # Initialize model
@@ -78,7 +83,10 @@ class GenderClassifier:
         self._prediction_history = {}  # track_id -> list of recent predictions
 
         logger.info(f"GenderClassifier initialized on {self.device}")
-        logger.info(f"Voting window: {voting_window}, min confidence: {min_confidence}")
+        logger.info(
+            f"Voting window: {voting_window}, min confidence: {min_confidence}, "
+            f"female_min_conf={female_min_confidence}, male_min_conf={male_min_confidence}"
+        )
 
     def _build_model(self, model_type: str) -> nn.Module:
         """Build model for gender classification."""
@@ -161,23 +169,21 @@ class GenderClassifier:
                     f"Track_id={track_id}: Raw probs class0={class_0_prob:.3f} class1={class_1_prob:.3f}"
                 )
 
-                # Get prediction
-                predicted_class = 0 if class_0_prob > class_1_prob else 1
-                confidence_val = max(class_0_prob, class_1_prob)
-
-            # MAPPING: Reverted to original based on testing
-            # class 0 = Female, class 1 = Male (confirmed via swap test)
-            gender = "F" if predicted_class == 0 else "M"  # class 0 -> F, class 1 -> M
+            # Map logits using shared utility; this classifier uses female0_male1 convention
+            gender, confidence_val = map_logits_to_gender(
+                class_0_prob,
+                class_1_prob,
+                "female0_male1",
+                min_confidence=self.min_confidence,
+                female_min_confidence=self.female_min_confidence,
+                male_min_confidence=self.male_min_confidence,
+            )
             logger.debug(
-                f"Track_id={track_id}: Mapped prediction: class={predicted_class} -> gender={gender}, conf={confidence_val:.3f}"
+                f"Track_id={track_id}: Mapped prediction -> gender={gender}, conf={confidence_val:.3f}"
             )
 
-            # Apply minimum confidence threshold
-            if confidence_val < self.min_confidence:
-                logger.debug(
-                    f"Track_id={track_id}: Low confidence {confidence_val:.2f} < {self.min_confidence}, returning 'Unknown'"
-                )
-                return "Unknown", confidence_val
+            if gender == "Unknown":
+                return gender, confidence_val
 
             # Update prediction history for voting
             if track_id is not None:
