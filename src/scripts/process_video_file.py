@@ -700,6 +700,16 @@ class VideoProcessor:
                         snap["latency_ms_p50"],
                         snap["latency_ms_p95"],
                     )
+                    # Log DB insert latencies if enabled
+                    if self.db_enable and self.db_manager is not None:
+                        dbm = self.db_manager.snapshot_metrics()
+                        logger.info(
+                            "DB metrics @frame %d: insert_p50=%.1fms insert_p95=%.1fms samples=%d",
+                            frame_num,
+                            dbm["insert_p50_ms"],
+                            dbm["insert_p95_ms"],
+                            int(dbm["samples"]),
+                        )
 
                 # Attach latest gender info to current frame detections for rendering
                 for d in detections:
@@ -876,13 +886,43 @@ class VideoProcessor:
         logger.info(f"Report saved: {report_path}")
 
         # Final DB flush
-        if self.db_enable and self.db_manager is not None and len(self._db_buffer) > 0:
+        if self.db_enable and self.db_manager is not None:
+            if len(self._db_buffer) > 0:
+                try:
+                    inserted = self.db_manager.insert_detections(self._db_buffer)
+                    logger.info("Final DB flush inserted=%d", inserted)
+                except Exception as e:
+                    logger.warning("Final DB flush failed: %s", e)
+                self._db_buffer.clear()
+            # Persist per-track gender labels and per-run summary from stable map
             try:
-                inserted = self.db_manager.insert_detections(self._db_buffer)
-                logger.info("Final DB flush inserted=%d", inserted)
+                male_tracks = 0
+                female_tracks = 0
+                unknown_tracks = 0
+                for t_id, g in track_id_to_gender.items():
+                    conf = float(track_id_to_gender_conf.get(t_id, 0.0))
+                    if g == "M":
+                        male_tracks += 1
+                    elif g == "F":
+                        female_tracks += 1
+                    else:
+                        unknown_tracks += 1
+                    if g in ("M", "F"):
+                        try:
+                            self.db_manager.upsert_track_gender(0, int(t_id), g, conf)
+                        except Exception:
+                            logger.warning("upsert_track_gender failed for track_id=%d", t_id)
+                unique_total = male_tracks + female_tracks + unknown_tracks
+                self.db_manager.insert_run_gender_summary(
+                    run_id=str(self.output_dir.name),
+                    camera_id=0,
+                    unique_total=unique_total,
+                    male_tracks=male_tracks,
+                    female_tracks=female_tracks,
+                    unknown_tracks=unknown_tracks,
+                )
             except Exception as e:
-                logger.warning("Final DB flush failed: %s", e)
-            self._db_buffer.clear()
+                logger.warning("Persisting unique-id gender summary failed: %s", e)
 
         return report
 

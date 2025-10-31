@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 from contextlib import contextmanager
 from typing import Generator, Iterable, Optional
+import time
 
 from .models import PersonDetection, PersonTrack
 
@@ -24,6 +25,7 @@ class PostgresManager:
         from typing import Any as _Any
         self._pool: Optional[_Any] = None
         self._init_pool()
+        self._ins_lat_ms: list[float] = []
 
     def _init_pool(self) -> None:
         try:
@@ -94,8 +96,11 @@ class PostgresManager:
                         "gender_confidence,frame_number) VALUES "
                     )
                     final_sql = base + ",".join(vals)
+                    t0 = time.monotonic()
                     cur.execute(final_sql)
                 conn.commit()
+            dur_ms = (time.monotonic() - t0) * 1000.0
+            self._record_insert_latency_ms(float(dur_ms))
             return len(rows)
         except Exception as e:
             logger.error("insert_detections failed: %s", e)
@@ -128,3 +133,69 @@ class PostgresManager:
                 conn.commit()
         except Exception as e:
             logger.error("upsert_track failed: %s", e)
+
+    def upsert_track_gender(
+        self, camera_id: int, track_id: int, gender: str, confidence: float
+    ) -> None:
+        """Upsert gender label per track for later unique counting."""
+        try:
+            with self._conn() as conn:
+                with conn.cursor() as cur:
+                    sql = (
+                        "INSERT INTO track_genders (camera_id, track_id, gender, confidence) "
+                        "VALUES (%s,%s,%s,%s) "
+                        "ON CONFLICT (camera_id, track_id) DO UPDATE SET "
+                        "gender=EXCLUDED.gender, confidence=EXCLUDED.confidence"
+                    )
+                    cur.execute(sql, (camera_id, track_id, gender, confidence))
+                conn.commit()
+        except Exception as e:
+            logger.error("upsert_track_gender failed: %s", e)
+
+    def insert_run_gender_summary(
+        self,
+        run_id: str,
+        camera_id: int,
+        unique_total: int,
+        male_tracks: int,
+        female_tracks: int,
+        unknown_tracks: int,
+    ) -> None:
+        """Insert a per-run aggregate of unique IDs by gender."""
+        try:
+            with self._conn() as conn:
+                with conn.cursor() as cur:
+                    sql = (
+                        "INSERT INTO run_gender_summary "
+                        "(run_id, camera_id, unique_total, male_tracks, "
+                        "female_tracks, unknown_tracks) VALUES (%s,%s,%s,%s,%s,%s)"
+                    )
+                    cur.execute(
+                        sql,
+                        (
+                            run_id,
+                            camera_id,
+                            unique_total,
+                            male_tracks,
+                            female_tracks,
+                            unknown_tracks,
+                        ),
+                    )
+                conn.commit()
+        except Exception as e:
+            logger.error("insert_run_gender_summary failed: %s", e)
+
+    def _record_insert_latency_ms(self, latency_ms: float) -> None:
+        self._ins_lat_ms.append(latency_ms)
+        if len(self._ins_lat_ms) > 100:
+            self._ins_lat_ms.pop(0)
+
+    def snapshot_metrics(self) -> dict:
+        data = list(self._ins_lat_ms)
+        if not data:
+            return {"insert_p50_ms": 0.0, "insert_p95_ms": 0.0, "samples": 0}
+        data.sort()
+        n = len(data)
+        p50 = data[int(0.5 * (n - 1))]
+        p95 = data[int(0.95 * (n - 1))]
+        return {"insert_p50_ms": round(p50, 1), "insert_p95_ms": round(p95, 1), "samples": n}
