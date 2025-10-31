@@ -58,3 +58,4 @@ CREATE TABLE IF NOT EXISTS run_gender_summary (
   created_at TIMESTAMP DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_run_gender_summary_run ON run_gender_summary(run_id);
+

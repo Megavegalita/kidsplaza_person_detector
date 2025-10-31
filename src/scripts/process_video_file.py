@@ -921,6 +921,50 @@ class VideoProcessor:
                     female_tracks=female_tracks,
                     unknown_tracks=unknown_tracks,
                 )
+                # Read back to validate
+                try:
+                    import psycopg2  # noqa: F401
+
+                    assert self.db_manager is not None
+                    with self.db_manager._conn() as _conn:
+                        with _conn.cursor() as _cur:
+                            _cur.execute(
+                                "SELECT unique_total, male_tracks, female_tracks, "
+                                "unknown_tracks FROM run_gender_summary WHERE run_id=%s "
+                                "AND camera_id=%s ORDER BY id DESC LIMIT 1",
+                                (str(self.output_dir.name), 0),
+                            )
+                            row = _cur.fetchone()
+                            if row is not None:
+                                db_unique, db_male, db_female, db_unknown = row
+                                logger.info(
+                                    "DB run summary persisted: unique=%s male=%s "
+                                    "female=%s unknown=%s",
+                                    db_unique,
+                                    db_male,
+                                    db_female,
+                                    db_unknown,
+                                )
+                                if (
+                                    int(db_unique) != unique_total
+                                    or int(db_male) != male_tracks
+                                    or int(db_female) != female_tracks
+                                    or int(db_unknown) != unknown_tracks
+                                ):
+                                    logger.warning(
+                                        "Run summary mismatch (mem vs DB): mem=(%d,%d,%d,%d) "
+                                        "db=(%s,%s,%s,%s)",
+                                        unique_total,
+                                        male_tracks,
+                                        female_tracks,
+                                        unknown_tracks,
+                                        db_unique,
+                                        db_male,
+                                        db_female,
+                                        db_unknown,
+                                    )
+                except Exception as _e:
+                    logger.warning("Validate run summary failed: %s", _e)
             except Exception as e:
                 logger.warning("Persisting unique-id gender summary failed: %s", e)
 
