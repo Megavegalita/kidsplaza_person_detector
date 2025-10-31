@@ -59,7 +59,9 @@ class Detector:
         self.total_inference_time = 0.0
         self.detection_count = 0
 
-        logger.info("Detector initialized on device: %s", self.model_loader.get_device())
+        logger.info(
+            "Detector initialized on device: %s", self.model_loader.get_device()
+        )
         logger.info("Thread workers: %d", max_workers)
 
     def detect(

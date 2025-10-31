@@ -35,6 +35,7 @@ class ReIDCache:
         self.url: str = url if url is not None else str(env_url)
         self.ttl_seconds = ttl_seconds
         from typing import Any as _Any
+
         self._client: Optional[_Any] = None
         self._connect()
 

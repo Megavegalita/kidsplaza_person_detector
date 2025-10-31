@@ -185,9 +185,7 @@ def verify_all_cameras(config_path: str, timeout: int = 10) -> Dict:
 
     print("\n" + "=" * 60)
     print(f"Camera Health Verification - {config['location']}")
-    print(
-        f"Server: {config['server']['host']}:{config['server']['port']}"
-    )
+    print(f"Server: {config['server']['host']}:{config['server']['port']}")
     print(f"Total Channels: {config['metadata']['total_channels']}")
     print("=" * 60)
 

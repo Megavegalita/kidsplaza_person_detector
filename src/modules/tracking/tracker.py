@@ -8,11 +8,13 @@ Optimized for person detection use case.
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, Protocol
+from typing import Dict, List, Optional, Protocol, Tuple
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+
 class _SupportsEmbed(Protocol):
     def embed(self, img: np.ndarray) -> np.ndarray:  # pragma: no cover - protocol
         ...
@@ -39,7 +41,8 @@ class Track:
     def update(self, bbox: np.ndarray, confidence: float, ema_alpha: float) -> None:
         """Update track with new detection using EMA smoothing on bbox."""
         if self._last_bbox is None:
-            self.bbox = bbox
+            # Use current bbox as previous for first smoothing step
+            self.bbox = self._ema_smooth(self.bbox, bbox, ema_alpha)
         else:
             self.bbox = self._ema_smooth(self._last_bbox, bbox, ema_alpha)
         self._last_bbox = self.bbox.copy()
@@ -218,7 +221,29 @@ class Tracker:
             bbox = self._convert_detection(detections[d_idx])
             track.update(bbox, detections[d_idx]["confidence"], self.ema_alpha)
 
-        # Handle unmatched detections (try Re-ID match; else create new track)
+        # Fallback: if greedy IoU matching produced no match but there is a clear best track,
+        # attach the detection to the best IoU track (even if below threshold) to avoid
+        # proliferating new tracks on sudden jumps.
+        if len(unmatched_detections) > 0 and len(self.tracks) > 0:
+            for d_idx in list(unmatched_detections):
+                best_iou = -1.0
+                best_t_idx_fb: Optional[int] = None
+                det_bbox_fb = self._convert_detection(detections[d_idx])
+                for t_idx, track in enumerate(self.tracks):
+                    if t_idx in matched_tracks:
+                        continue
+                    iou_val = float(self._iou(det_bbox_fb, track.bbox))
+                    if iou_val > best_iou:
+                        best_iou = iou_val
+                        best_t_idx_fb = t_idx
+                if best_t_idx_fb is not None:
+                    track = self.tracks[best_t_idx_fb]
+                    track.update(det_bbox_fb, detections[d_idx]["confidence"], self.ema_alpha)
+                    matched_tracks.add(best_t_idx_fb)
+                    matched_indices.append((d_idx, best_t_idx_fb))
+                    unmatched_detections.discard(d_idx)
+
+        # Handle remaining unmatched detections (try Re-ID match; else create new track)
         for d_idx in list(unmatched_detections):
             bbox = self._convert_detection(detections[d_idx])
             assigned = False
@@ -284,6 +309,8 @@ class Tracker:
                 track.hits = self.min_hits  # Start confirmed
                 self.tracks.append(track)
                 self.next_id += 1
+                # Link this new track to detection for downstream consumers
+                matched_indices.append((d_idx, len(self.tracks) - 1))
 
         # Remove old tracks
         self.tracks = [t for t in self.tracks if t.time_since_update <= self.max_age]

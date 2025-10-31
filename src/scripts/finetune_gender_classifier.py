@@ -9,7 +9,7 @@ and saves the fine-tuned model weights.
 import argparse
 import logging
 from pathlib import Path
-from typing import Tuple, TypedDict, List
+from typing import List, Tuple, TypedDict
 
 import torch
 import torch.nn as nn
@@ -55,7 +55,9 @@ class UTKFaceDataset(Dataset):
 
                     # Filter age range 18-80 for clearer gender cues
                     if 18 <= age <= 80:
-                        self.samples.append({"path": str(filename), "gender": int(gender)})
+                        self.samples.append(
+                            {"path": str(filename), "gender": int(gender)}
+                        )
                 except ValueError:
                     continue
 

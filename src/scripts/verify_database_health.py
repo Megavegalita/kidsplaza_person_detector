@@ -118,7 +118,9 @@ def verify_postgresql_connection(
 
         response_time = time.time() - start_time
 
-        version_str = str(version[0])[:50] if version and len(version) > 0 else "unknown"
+        version_str = (
+            str(version[0])[:50] if version and len(version) > 0 else "unknown"
+        )
         return (
             True,
             f"PostgreSQL connected successfully - Version: {version_str}",

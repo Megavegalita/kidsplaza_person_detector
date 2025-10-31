@@ -202,7 +202,7 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    results: List[Optional[Dict[str, Any]]]= []
+    results: List[Optional[Dict[str, Any]]] = []
     for scenario_id, _ in IMPROVEMENT_SCENARIOS:
         rpt = load_report(args.base, scenario_id, args.video)
         if rpt is None:

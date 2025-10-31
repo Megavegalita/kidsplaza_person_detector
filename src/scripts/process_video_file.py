@@ -24,16 +24,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from modules.demographics import GenderClassifier  # noqa: E402
 from modules.demographics.async_worker import AsyncGenderWorker  # noqa: E402
 from modules.demographics.face_detector import FaceDetector  # noqa: E402
-from modules.demographics.keras_tf_gender_classifier import (  # noqa: E402
-    KerasTFGenderClassifier,
-)
+from modules.demographics.keras_tf_gender_classifier import \
+    KerasTFGenderClassifier  # noqa: E402
 from modules.demographics.metrics import GenderMetrics  # noqa: E402
 from modules.detection.detector import Detector  # noqa: E402
-from modules.reid import (  # noqa: E402
-    ReIDCache,
-    ReIDEmbedder,
-    integrate_reid_for_tracks,
-)
+from modules.reid import (ReIDCache, ReIDEmbedder,  # noqa: E402
+                          integrate_reid_for_tracks)
 from modules.reid.arcface_embedder import ArcFaceEmbedder  # noqa: E402
 from modules.tracking.tracker import Tracker  # noqa: E402
 
@@ -180,7 +176,9 @@ class VideoProcessor:
         )
         self.gender_metrics = GenderMetrics() if gender_enable else None
         self.gender_max_per_frame = gender_max_per_frame
-        self._pending_gender_tasks: List[str] = []  # list of task_ids for polling results
+        self._pending_gender_tasks: List[
+            str
+        ] = []  # list of task_ids for polling results
         # Face/gender caches and scheduling
         self.gender_face_every_k = max(1, int(gender_face_every_k))
         self.gender_cache_ttl_frames = max(1, int(gender_cache_ttl_frames))
@@ -633,7 +631,9 @@ class VideoProcessor:
                                 else:
                                     # _gc is not None by branch guards
                                     assert _gc is not None
-                                    gender, gconf = _gc.classify(c, track_id=track_id_val)
+                                    gender, gconf = _gc.classify(
+                                        c, track_id=track_id_val
+                                    )
                                 dur = (time.time() * 1000.0) - start_ms
                                 if self.gender_metrics is not None:
                                     self.gender_metrics.observe_latency(dur)
