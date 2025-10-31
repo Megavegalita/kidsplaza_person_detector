@@ -90,6 +90,13 @@ output/
 !config/*.json
 !input/cameras_config/*.json
 
+# Model files
+*.pt
+*.pth
+*.onnx
+*.mlpackage
+models/
+
 # Large video files (>100MB)
 input/video/*.mp4
 

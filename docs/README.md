@@ -49,6 +49,7 @@ docs/
 ├── README.md                              # This file
 ├── QUICK_START.md                         # Quick start guide
 ├── DEVELOPER_CHECKLIST.md                 # Developer checklist
+├── reports/                           # Consolidated reports and results
 └── standards/
     ├── python_production_best_practices.md # Best practices
     ├── FILE_CREATION_REQUIREMENTS.md      # File requirements
@@ -77,10 +78,10 @@ Xem trong `templates/` directory:
 - **Testing**: Pytest
 - **Pre-commit**: Pre-commit hooks
 
-### Scripts
-- **Database Health**: `python src/scripts/verify_database_health.py`
-- **Camera Health**: `python src/scripts/verify_camera_health.py`
-- **Display Camera**: `python src/scripts/display_camera.py <channel>`
+### Reports
+- Re-ID: `debug_plan/REID_OPTIMIZATION_FINAL_REPORT.md`, `REID_FACE_OPTIMIZATION_REPORT.md`
+- ArcFace: `ARCFACE_INTEGRATION_STATUS.md`, `ARCFACE_BENCHMARK_INTERIM.md`
+- Gender: `GENDER_CLASSIFICATION_FINAL_CONFIG.md`, `GENDER_CLASSIFICATION_USAGE.md`
 
 ## 📖 Usage
 
