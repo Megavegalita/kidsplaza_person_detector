@@ -129,7 +129,11 @@ class FaceGenderClassifier:
                 gender = "M" if predicted_class == 0 else "F"
 
             logger.debug(
-                f"Face gender: {gender} (conf={confidence:.3f}, class0={class_0_prob:.3f}, class1={class_1_prob:.3f})"
+                "Face gender: %s (conf=%.3f, class0=%.3f, class1=%.3f)",
+                gender,
+                confidence,
+                class_0_prob,
+                class_1_prob,
             )
 
             # Apply minimum confidence threshold

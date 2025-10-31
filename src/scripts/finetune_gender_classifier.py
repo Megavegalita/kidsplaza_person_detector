@@ -9,7 +9,7 @@ and saves the fine-tuned model weights.
 import argparse
 import logging
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Tuple, TypedDict, List
 
 import torch
 import torch.nn as nn
@@ -22,6 +22,11 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+
+class _Sample(TypedDict):
+    path: str
+    gender: int
 
 
 class UTKFaceDataset(Dataset):
@@ -37,7 +42,7 @@ class UTKFaceDataset(Dataset):
         """
         self.root_dir = Path(root_dir)
         self.transform = transform
-        self.samples = []
+        self.samples: List[_Sample] = []
 
         # Parse UTKFace files: [age]_[gender]_[race]_[date&time].jpg
         for filename in sorted(self.root_dir.glob("*.jpg")):
@@ -50,7 +55,7 @@ class UTKFaceDataset(Dataset):
 
                     # Filter age range 18-80 for clearer gender cues
                     if 18 <= age <= 80:
-                        self.samples.append({"path": str(filename), "gender": gender})
+                        self.samples.append({"path": str(filename), "gender": int(gender)})
                 except ValueError:
                     continue
 
@@ -70,10 +75,13 @@ class UTKFaceDataset(Dataset):
         """
         sample = self.samples[idx]
         image = Image.open(sample["path"]).convert("RGB")
-        label = sample["gender"]
+        label: int = int(sample["gender"])  # already int by construction
 
         if self.transform:
             image = self.transform(image)
+        else:
+            # Basic to-tensor if no transform provided
+            image = transforms.ToTensor()(image)
 
         return image, label
 
@@ -105,18 +113,11 @@ def create_data_loaders(
         ]
     )
 
-    # Simple transform for validation
-    val_transform = transforms.Compose(
-        [
-            transforms.Resize((224, 224)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ]
-    )
+    # Validation will reuse same normalization pipeline after split
 
     # Create datasets
     train_dataset = UTKFaceDataset(root_dir, transform=train_transform)
-    val_dataset = UTKFaceDataset(root_dir, transform=val_transform)
+    # Separate validation dataset not required; using split from train_dataset
 
     # Split dataset
     train_size = int(train_split * len(train_dataset))

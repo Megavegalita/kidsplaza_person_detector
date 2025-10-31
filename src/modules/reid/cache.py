@@ -5,12 +5,11 @@ Redis-backed cache for Re-ID embeddings per track.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional, List, Dict, Any
 import json
 import logging
 import os
-import time
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
@@ -31,14 +30,17 @@ class ReIDCache:
     """Thin Redis-like cache adapter for Re-ID embeddings."""
 
     def __init__(self, url: Optional[str] = None, ttl_seconds: int = 60) -> None:
-        self.url = url or os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        # Ensure url is always a concrete string for downstream clients
+        env_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        self.url: str = url if url is not None else str(env_url)
         self.ttl_seconds = ttl_seconds
-        self._client = None
+        from typing import Any as _Any
+        self._client: Optional[_Any] = None
         self._connect()
 
     def _connect(self) -> None:
         try:
-            import redis  # type: ignore
+            import redis
 
             self._client = redis.Redis.from_url(self.url)
             # simple ping
@@ -56,7 +58,9 @@ class ReIDCache:
             return
         payload: Dict[str, Any] = {
             "track_id": item.track_id,
-            "embedding": item.embedding.tolist() if item.embedding is not None else None,
+            "embedding": item.embedding.tolist()
+            if item.embedding is not None
+            else None,
             "updated_at": item.updated_at,
         }
         if item.embeddings is not None:
@@ -65,7 +69,9 @@ class ReIDCache:
             payload["aggregation_method"] = item.aggregation_method
         try:
             self._client.setex(
-                self._key(session_id, item.track_id), self.ttl_seconds, json.dumps(payload)
+                self._key(session_id, item.track_id),
+                self.ttl_seconds,
+                json.dumps(payload),
             )
         except Exception as e:
             logger.warning("ReIDCache.set failed: %s", e)
@@ -85,12 +91,12 @@ class ReIDCache:
                 if data.get("embedding") is not None
                 else np.array([], dtype=np.float32),
                 updated_at=float(data.get("updated_at", 0.0)),
-                embeddings=embeddings_list if isinstance(embeddings_list, list) else None,
+                embeddings=embeddings_list
+                if isinstance(embeddings_list, list)
+                else None,
                 aggregation_method=str(data.get("aggregation_method", "single")),
             )
             return item
         except Exception as e:
             logger.warning("ReIDCache.get failed: %s", e)
             return None
-
-

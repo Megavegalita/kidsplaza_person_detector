@@ -97,6 +97,13 @@ class AsyncGenderWorker:
         with self._results_lock:
             return self._results.get(task_id)
 
+    def get_queue_size(self) -> int:
+        """Return current queue size (approximate)."""
+        try:
+            return self._queue.qsize()
+        except Exception:
+            return 0
+
     def _run_loop(self) -> None:
         while not self._shutdown.is_set():
             try:

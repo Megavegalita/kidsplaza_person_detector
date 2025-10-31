@@ -23,8 +23,9 @@ def check_database_dependencies() -> Dict[str, bool]:
 
     # Check psycopg2
     try:
-        import psycopg2
+        import importlib
 
+        importlib.import_module("psycopg2")
         dependencies["psycopg2"] = True
     except ImportError:
         print(
@@ -34,8 +35,9 @@ def check_database_dependencies() -> Dict[str, bool]:
 
     # Check redis
     try:
-        import redis
+        import importlib
 
+        importlib.import_module("redis")
         dependencies["redis"] = True
     except ImportError:
         print("Warning: redis not installed. Redis health check will be skipped.")
@@ -82,7 +84,6 @@ def verify_postgresql_connection(
     """
     try:
         import psycopg2
-        from psycopg2 import OperationalError
 
         username = config["username"]
         password = config["password"]
@@ -94,9 +95,15 @@ def verify_postgresql_connection(
 
         # Create connection string
         if password:
-            conn_string = f"dbname={database} user={username} password={password} host={host} port={port} connect_timeout={timeout}"
+            conn_string = (
+                f"dbname={database} user={username} password={password} "
+                f"host={host} port={port} connect_timeout={timeout}"
+            )
         else:
-            conn_string = f"dbname={database} user={username} host={host} port={port} connect_timeout={timeout}"
+            conn_string = (
+                f"dbname={database} user={username} "
+                f"host={host} port={port} connect_timeout={timeout}"
+            )
 
         # Attempt connection
         conn = psycopg2.connect(conn_string)
@@ -111,9 +118,10 @@ def verify_postgresql_connection(
 
         response_time = time.time() - start_time
 
+        version_str = str(version[0])[:50] if version and len(version) > 0 else "unknown"
         return (
             True,
-            f"PostgreSQL connected successfully - Version: {version[0][:50]}",
+            f"PostgreSQL connected successfully - Version: {version_str}",
             response_time,
         )
 
@@ -165,7 +173,7 @@ def verify_redis_connection(
         r = redis.Redis(**connection_params)
 
         # Test connection with PING
-        response = r.ping()
+        r.ping()
 
         # Get server info
         info = r.info("server")
@@ -203,17 +211,17 @@ def verify_postgresql(config: Dict, timeout: int = 5) -> Dict:
         Dictionary with verification results
     """
     print(f"\n{'='*60}")
-    print(f"Verifying PostgreSQL")
+    print("Verifying PostgreSQL")
     print(f"Host: {config['host']}:{config['port']}")
     print(f"Database: {config['database']}")
     print(f"User: {config['username']}")
     print(f"{'='*60}")
 
-    start_time = time.time()
+    # Start time not needed in this view; response_time from connector is sufficient
     is_healthy, status_message, response_time = verify_postgresql_connection(
         config, timeout
     )
-    elapsed_time = time.time() - start_time
+    # elapsed_time not required; response_time already measured inside connector
 
     result = {
         "database_type": "PostgreSQL",
@@ -251,14 +259,14 @@ def verify_redis(config: Dict, timeout: int = 5) -> Dict:
         Dictionary with verification results
     """
     print(f"\n{'='*60}")
-    print(f"Verifying Redis")
+    print("Verifying Redis")
     print(f"Host: {config['host']}:{config['port']}")
     print(f"Database: {config['database']}")
     print(f"{'='*60}")
 
-    start_time = time.time()
+    # Start time not needed in this view; response_time from connector is sufficient
     is_healthy, status_message, response_time = verify_redis_connection(config, timeout)
-    elapsed_time = time.time() - start_time
+    # elapsed_time not required; response_time already measured inside connector
 
     result = {
         "database_type": "Redis",

@@ -14,7 +14,7 @@
   - `feature/phase5-gender-classifier`
   - `feature/phase6-storage-schema`
   - `feature/phase7-live-pipeline`
-  - `feature/phase8-multichannel`
+  - `feature/phase8-multichannel`       
 
 ### Quy tắc PR
 - Bắt buộc 1 reviewer tối thiểu, CI phải xanh.

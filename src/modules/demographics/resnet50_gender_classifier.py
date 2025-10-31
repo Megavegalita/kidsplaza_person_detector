@@ -40,13 +40,14 @@ class ResNet50GenderClassifier:
 
         # Default model path
         if model_path is None:
-            model_path = (
+            default_model_path: Path = (
                 Path(__file__).parent.parent.parent.parent
                 / "models"
                 / "resnet50_gender_pytorch.pth"
             )
-
-        self.model_path = Path(model_path)
+            self.model_path = default_model_path
+        else:
+            self.model_path = Path(model_path)
 
         # Load model
         self.model = self._load_model()
@@ -131,7 +132,11 @@ class ResNet50GenderClassifier:
                     confidence = float(female_prob)
 
                 logger.debug(
-                    f"ResNet50 gender: {predicted_gender} (conf={confidence:.3f}, M={male_prob:.3f}, F={female_prob:.3f})"
+                    "ResNet50 gender: %s (conf=%.3f, M=%.3f, F=%.3f)",
+                    predicted_gender,
+                    confidence,
+                    male_prob,
+                    female_prob,
                 )
 
                 # Apply minimum confidence threshold

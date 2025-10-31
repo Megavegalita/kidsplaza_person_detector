@@ -7,7 +7,7 @@ This module provides functionality to check camera stream health and status.
 
 import logging
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 from camera_reader import CameraReader, CameraReaderError
 

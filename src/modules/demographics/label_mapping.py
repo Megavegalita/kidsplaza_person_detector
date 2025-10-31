@@ -49,7 +49,11 @@ def map_logits_to_gender(
 
     # Apply optional asymmetric thresholds
     if label == "F":
-        thr = female_min_confidence if female_min_confidence is not None else min_confidence
+        thr = (
+            female_min_confidence
+            if female_min_confidence is not None
+            else min_confidence
+        )
     elif label == "M":
         thr = male_min_confidence if male_min_confidence is not None else min_confidence
     else:
@@ -59,7 +63,3 @@ def map_logits_to_gender(
         return "Unknown", conf
 
     return label, conf
-
-
-
-

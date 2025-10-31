@@ -73,7 +73,7 @@ class ModelLoader:
     def _load_model(self) -> None:
         """Load YOLOv8 model."""
         try:
-            logger.info(f"Loading YOLOv8 model from {self.model_path}")
+            logger.info("Loading YOLOv8 model from %s", str(self.model_path))
 
             if not self.model_path.exists():
                 # Download model if not exists
@@ -82,7 +82,7 @@ class ModelLoader:
             self.model = YOLO(str(self.model_path))
 
             # Move model to selected device
-            logger.info(f"Model loaded on device: {self.device}")
+            logger.info("Model loaded on device: %s", self.device)
 
             # Set model to evaluation mode for inference
             if hasattr(self.model.model, "eval"):
@@ -91,7 +91,7 @@ class ModelLoader:
             logger.info("Model loaded successfully")
 
         except Exception as e:
-            logger.error(f"Failed to load model: {e}")
+            logger.error("Failed to load model: %s", e)
             raise ModelLoaderError(f"Model loading failed: {e}") from e
 
     def detect(self, frame, conf: Optional[float] = None, iou: Optional[float] = None):
@@ -110,13 +110,15 @@ class ModelLoader:
         iou = iou if iou is not None else self.iou_threshold
 
         try:
+            if self.model is None:
+                raise ModelLoaderError("Model is not loaded")
             results = self.model.predict(
                 frame, device=self.device, conf=conf, iou=iou, verbose=False
             )
             return results
 
         except Exception as e:
-            logger.error(f"Detection failed: {e}")
+            logger.error("Detection failed: %s", e)
             raise ModelLoaderError(f"Detection failed: {e}") from e
 
     def detect_persons(self, frame, conf: Optional[float] = None) -> list:
@@ -173,7 +175,7 @@ if __name__ == "__main__":
     try:
         loader = ModelLoader()
 
-        print(f"✅ Model loaded successfully")
+        print("✅ Model loaded successfully")
         print(f"Device: {loader.get_device()}")
         print(f"MPS enabled: {loader.is_mps_enabled()}")
 

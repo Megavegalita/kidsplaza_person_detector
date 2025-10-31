@@ -9,12 +9,10 @@ embedding. Falls back to lightweight embedder if no face found or model missing.
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 import numpy as np
 
 from .embedder import ReIDEmbedder
-
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +30,9 @@ class ArcFaceEmbedder(ReIDEmbedder):
         if self._face_app is not None:
             logger.info("ArcFaceEmbedder initialized (insightface)")
         else:
-            logger.warning("ArcFace not available; falling back to lightweight embedder")
+            logger.warning(
+                "ArcFace not available; falling back to lightweight embedder"
+            )
 
     def _try_init_arcface(self):
         try:
@@ -54,6 +54,7 @@ class ArcFaceEmbedder(ReIDEmbedder):
             faces = self._face_app.get(crop)
             if not faces:
                 return super().embed(crop)
+
             # Choose the largest face (by bbox area)
             def _area(f) -> float:
                 x1, y1, x2, y2 = f.bbox.astype(int)
@@ -77,5 +78,3 @@ class ArcFaceEmbedder(ReIDEmbedder):
         except Exception as e:
             logger.warning("ArcFace embedding failed; fallback used: %s", e)
             return super().embed(crop)
-
-

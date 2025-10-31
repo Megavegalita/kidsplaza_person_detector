@@ -55,8 +55,9 @@ class ReIDEmbedder:
 
     def _forward_model(self, tensor: np.ndarray) -> np.ndarray:
         # Lightweight linear projection as placeholder for real backbone
-        assert self._proj is not None
-        flat = tensor.flatten().astype(np.float32)
+        if self._proj is None:
+            raise RuntimeError("Projection matrix is not initialized")
+        flat: np.ndarray = tensor.flatten().astype(np.float32)
         # Ensure length matches; pad or trim if needed
         if flat.shape[0] < self._proj.shape[1]:
             pad = np.zeros(self._proj.shape[1] - flat.shape[0], dtype=np.float32)

@@ -6,7 +6,6 @@ This module provides functionality to read frames from RTSP camera streams.
 """
 
 import logging
-import time
 from typing import Optional, Tuple
 
 import cv2
@@ -62,7 +61,12 @@ class CameraReader:
                 raise CameraReaderError(f"Failed to open RTSP stream: {self.rtsp_url}")
 
             # Test frame read to verify connection
-            ret, frame = self.cap.read()
+            assert self.cap is not None
+            assert self.cap is not None
+            cap = self.cap
+            if cap is None:
+                raise CameraReaderError("VideoCapture not initialized after connect")
+            ret, frame = cap.read()
             if not ret:
                 raise CameraReaderError(
                     f"Failed to read initial frame from: {self.rtsp_url}"
@@ -92,12 +96,20 @@ class CameraReader:
                 logger.warning("Camera not connected, attempting reconnect...")
                 self._connect()
 
-            ret, frame = self.cap.read()
+            cap = self.cap
+            if cap is None:
+                raise CameraReaderError("VideoCapture not initialized")
+            ret, frame = cap.read()
 
             if not ret:
                 logger.warning("Failed to read frame, trying reconnect...")
                 self._connect()
-                ret, frame = self.cap.read()
+                cap = self.cap
+                if cap is None:
+                    raise CameraReaderError(
+                        "VideoCapture not initialized after reconnect"
+                    )
+                ret, frame = cap.read()
 
                 if not ret:
                     raise CameraReaderError("Failed to read frame after reconnect")
@@ -175,7 +187,7 @@ if __name__ == "__main__":
         print(f"Testing RTSP connection: {rtsp_url[:50]}...")
 
         with CameraReader(rtsp_url) as reader:
-            print(f"✅ Connected successfully")
+            print("✅ Connected successfully")
             print(f"Frame size: {reader.get_frame_size()}")
             print(f"FPS: {reader.get_fps()}")
 

@@ -5,14 +5,14 @@ Utilities to integrate Re-ID into tracking pipeline.
 
 from __future__ import annotations
 
-from typing import List, Dict, Optional
-import time
 import logging
+import time
+from typing import Dict, List
 
 import numpy as np
 
-from .embedder import ReIDEmbedder
 from .cache import ReIDCache, ReIDCacheItem
+from .embedder import ReIDEmbedder
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +74,11 @@ def integrate_reid_for_tracks(
                 continue
             cached = cache.get(session_id, int(track_id))
             if cached is not None:
-                last_age = frame_index - int(cached.updated_at) if cached.updated_at > 1e6 else 0
+                last_age = (
+                    frame_index - int(cached.updated_at)
+                    if cached.updated_at > 1e6
+                    else 0
+                )
                 # If we encoded recently, skip
                 if last_age < min_interval_frames:
                     continue
@@ -82,7 +86,9 @@ def integrate_reid_for_tracks(
             if bbox is None:
                 continue
             x1, y1, x2, y2 = map(int, bbox)
-            crop = processor.crop_person(frame, np.array([x1, y1, x2, y2], dtype=np.int32))
+            crop = processor.crop_person(
+                frame, np.array([x1, y1, x2, y2], dtype=np.int32)
+            )
             if crop is None:
                 continue
             emb = embedder.embed(crop)
@@ -93,7 +99,11 @@ def integrate_reid_for_tracks(
                 existing = []
                 if prev is not None and prev.embeddings:
                     existing = prev.embeddings
-                elif prev is not None and prev.embedding is not None and prev.embedding.size > 0:
+                elif (
+                    prev is not None
+                    and prev.embedding is not None
+                    and prev.embedding.size > 0
+                ):
                     existing = [prev.embedding.tolist()]
                 existing.append(emb.tolist())
                 # keep only most recent max_embeddings
@@ -112,5 +122,3 @@ def integrate_reid_for_tracks(
             embeds_done += 1
     except Exception as e:
         logger.warning("Re-ID integration skipped due to error: %s", e)
-
-

@@ -6,14 +6,17 @@ Provides lightweight gender classification with majority voting for stability.
 """
 
 import logging
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, TypedDict
 
 import cv2
 import numpy as np
 import torch
 import torch.nn as nn
-from torchvision import models, transforms
+from torchvision import transforms
+
 from .label_mapping import map_logits_to_gender
+
+logger = logging.getLogger(__name__)
 
 try:
     import timm
@@ -23,7 +26,10 @@ except ImportError:
     TIMM_AVAILABLE = False
     logger.warning("timm not available, will use simple CNN")
 
-logger = logging.getLogger(__name__)
+
+class _PredictionEntry(TypedDict):
+    gender: str
+    confidence: float
 
 
 class GenderClassifier:
@@ -47,7 +53,11 @@ class GenderClassifier:
         Initialize gender classifier.
 
         Args:
-            model_type: 'simple' for basic CNN, 'timm_mobile' for MobileNetV3, 'timm_efficient' for EfficientNet, 'resnet18_face' for torchvision ResNet-18
+            model_type: One of:
+                - 'simple' (basic CNN)
+                - 'timm_mobile' (MobileNetV3)
+                - 'timm_efficient' (EfficientNet)
+                - 'resnet18_face' (torchvision ResNet-18)
             device: Device for inference ('mps', 'cpu', 'cuda')
             voting_window: Number of recent predictions for majority voting
             min_confidence: Minimum confidence threshold for prediction
@@ -80,12 +90,15 @@ class GenderClassifier:
         )
 
         # Prediction history for voting
-        self._prediction_history = {}  # track_id -> list of recent predictions
+        self._prediction_history: Dict[int, List[_PredictionEntry]] = {}
 
-        logger.info(f"GenderClassifier initialized on {self.device}")
+        logger.info("GenderClassifier initialized on %s", self.device)
         logger.info(
-            f"Voting window: {voting_window}, min confidence: {min_confidence}, "
-            f"female_min_conf={female_min_confidence}, male_min_conf={male_min_confidence}"
+            "Voting window: %d, min confidence: %.2f, female_min_conf=%s, male_min_conf=%s",
+            voting_window,
+            min_confidence,
+            str(female_min_confidence),
+            str(male_min_confidence),
         )
 
     def _build_model(self, model_type: str) -> nn.Module:
@@ -145,7 +158,9 @@ class GenderClassifier:
         try:
             # Debug: log crop properties
             logger.debug(
-                f"Classifying gender for track_id={track_id}, crop shape={crop.shape}"
+                "Classifying gender for track_id=%s, crop shape=%s",
+                str(track_id),
+                str(crop.shape),
             )
 
             # Convert BGR to RGB
@@ -166,7 +181,10 @@ class GenderClassifier:
 
                 # DEBUG: Track probability distribution to diagnose mislabeling
                 logger.debug(
-                    f"Track_id={track_id}: Raw probs class0={class_0_prob:.3f} class1={class_1_prob:.3f}"
+                    "Track_id=%s: Raw probs class0=%.3f class1=%.3f",
+                    str(track_id),
+                    class_0_prob,
+                    class_1_prob,
                 )
 
             # Map logits using shared utility; this classifier uses female0_male1 convention
@@ -179,7 +197,10 @@ class GenderClassifier:
                 male_min_confidence=self.male_min_confidence,
             )
             logger.debug(
-                f"Track_id={track_id}: Mapped prediction -> gender={gender}, conf={confidence_val:.3f}"
+                "Track_id=%s: Mapped prediction -> gender=%s, conf=%.3f",
+                str(track_id),
+                gender,
+                confidence_val,
             )
 
             if gender == "Unknown":
@@ -191,7 +212,7 @@ class GenderClassifier:
                     self._prediction_history[track_id] = []
 
                 self._prediction_history[track_id].append(
-                    {"gender": gender, "confidence": confidence_val}
+                    {"gender": gender, "confidence": float(confidence_val)}
                 )
 
                 # Keep only recent predictions
@@ -203,7 +224,7 @@ class GenderClassifier:
                     recent_genders = [
                         p["gender"] for p in self._prediction_history[track_id]
                     ]
-                    gender_counts = {}
+                    gender_counts: Dict[str, int] = {}
                     for g in recent_genders:
                         gender_counts[g] = gender_counts.get(g, 0) + 1
                     vote_gender = max(gender_counts.items(), key=lambda x: x[1])[0]
@@ -214,12 +235,19 @@ class GenderClassifier:
                     ]
                     if last_confidence > 0.7:
                         logger.debug(
-                            f"Track_id={track_id}: Majority vote={vote_gender} (history: {recent_genders}), confidence={last_confidence:.2f}"
+                            "Track_id=%s: Majority vote=%s (history: %s), confidence=%.2f",
+                            str(track_id),
+                            vote_gender,
+                            str(recent_genders),
+                            last_confidence,
                         )
                         return vote_gender, last_confidence
 
             logger.debug(
-                f"Track_id={track_id}: Direct prediction={gender}, confidence={confidence_val:.2f}"
+                "Track_id=%s: Direct prediction=%s, confidence=%.2f",
+                str(track_id),
+                gender,
+                confidence_val,
             )
             return gender, confidence_val
 
@@ -247,14 +275,14 @@ class GenderClassifier:
             return None
 
         # Get majority vote
-        gender_counts = {}
+        gender_counts: Dict[str, int] = {}
         for pred in history[-self.voting_window :]:
             g = pred["gender"]
             gender_counts[g] = gender_counts.get(g, 0) + 1
 
-        vote_gender = max(gender_counts.items(), key=lambda x: x[1])[0]
-        avg_confidence = np.mean(
-            [p["confidence"] for p in history[-self.voting_window :]]
+        vote_gender: str = max(gender_counts.items(), key=lambda x: x[1])[0]
+        avg_confidence = float(
+            np.mean([p["confidence"] for p in history[-self.voting_window :]])
         )
 
         return vote_gender, avg_confidence
@@ -271,4 +299,4 @@ class GenderClassifier:
         elif track_id in self._prediction_history:
             del self._prediction_history[track_id]
 
-        logger.debug(f"Cleared prediction history for track_id={track_id}")
+        logger.debug("Cleared prediction history for track_id=%s", str(track_id))

@@ -39,9 +39,9 @@ def generate_alternative_urls(
     password = credentials["password"]
 
     urls = [
-        f"rtsp://{username}:{password}@{host}:{port}/Streaming/Channels/{channel_id}01",  # Hikvision main
-        f"rtsp://{username}:{password}@{host}:{port}/Streaming/Channels/{channel_id}02",  # Hikvision sub
-        f"rtsp://{username}:{password}@{host}:{port}/cam/realmonitor?channel={channel_id}&subtype=0",
+        f"rtsp://{username}:{password}@{host}:{port}/Streaming/Channels/{channel_id}01",  # Hikvision main  # noqa: E501
+        f"rtsp://{username}:{password}@{host}:{port}/Streaming/Channels/{channel_id}02",  # Hikvision sub  # noqa: E501
+        f"rtsp://{username}:{password}@{host}:{port}/cam/realmonitor?channel={channel_id}&subtype=0",  # noqa: E501
         f"rtsp://{username}:{password}@{host}:{port}/h264/ch{channel_id}/main/av_stream",
         f"rtsp://{username}:{password}@{host}:{port}/h264/ch{channel_id}/sub/av_stream",
         f"rtsp://{username}:{password}@{host}:{port}/channel{channel_id}",
@@ -185,7 +185,9 @@ def verify_all_cameras(config_path: str, timeout: int = 10) -> Dict:
 
     print("\n" + "=" * 60)
     print(f"Camera Health Verification - {config['location']}")
-    print(f"Server: {config['server']['host']}:{config['server']['port']}")
+    print(
+        f"Server: {config['server']['host']}:{config['server']['port']}"
+    )
     print(f"Total Channels: {config['metadata']['total_channels']}")
     print("=" * 60)
 

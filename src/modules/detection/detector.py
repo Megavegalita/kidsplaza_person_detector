@@ -6,16 +6,14 @@ Uses multi-threading (CPU) + MPS (GPU) for maximum performance.
 """
 
 import logging
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
-import torch
 
 from .image_processor import ImageProcessor
-from .model_loader import ModelLoader, ModelLoaderError
+from .model_loader import ModelLoader
 
 logger = logging.getLogger(__name__)
 
@@ -61,8 +59,8 @@ class Detector:
         self.total_inference_time = 0.0
         self.detection_count = 0
 
-        logger.info(f"Detector initialized on device: {self.model_loader.get_device()}")
-        logger.info(f"Thread workers: {max_workers}")
+        logger.info("Detector initialized on device: %s", self.model_loader.get_device())
+        logger.info("Thread workers: %d", max_workers)
 
     def detect(
         self, frame: np.ndarray, return_image: bool = False
@@ -94,8 +92,10 @@ class Detector:
                 avg_time = self.total_inference_time / self.frame_count
                 fps = 1.0 / avg_time
                 logger.info(
-                    f"Detection stats: {self.frame_count} frames, "
-                    f"avg {avg_time*1000:.2f}ms, {fps:.2f} FPS"
+                    "Detection stats: %d frames, avg %.2fms, %.2f FPS",
+                    self.frame_count,
+                    avg_time * 1000,
+                    fps,
                 )
 
             annotated = None
@@ -195,7 +195,7 @@ if __name__ == "__main__":
     try:
         detector = Detector()
 
-        print(f"✅ Detector initialized")
+        print("✅ Detector initialized")
         print(f"Device: {detector.model_loader.get_device()}")
         print(f"MPS enabled: {detector.model_loader.is_mps_enabled()}")
 
@@ -203,12 +203,12 @@ if __name__ == "__main__":
         test_frame = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
 
         detections, annotated = detector.detect(test_frame, return_image=True)
-        print(f"\n✅ Detection test passed")
+        print("\n✅ Detection test passed")
         print(f"Detections: {len(detections)}")
 
         # Print statistics
         stats = detector.get_statistics()
-        print(f"\nStatistics:")
+        print("\nStatistics:")
         print(f"  Frames processed: {stats['frame_count']}")
         print(f"  Average time: {stats['average_time_ms']:.2f} ms")
         print(f"  FPS: {stats['fps']:.2f}")

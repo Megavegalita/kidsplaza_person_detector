@@ -11,8 +11,7 @@ Usage:
 import argparse
 import json
 from pathlib import Path
-from typing import Dict, Optional, List, Tuple
-
+from typing import Any, Dict, List, Optional, Tuple
 
 IMPROVEMENT_SCENARIOS = [
     ("adapt_e20_c04_reid_opt_v2", "Baseline (Adaptive + Re-ID optimized)"),
@@ -42,14 +41,18 @@ def load_report(base: Path, scenario: str, video_stem: str) -> Optional[Dict]:
 def extract_metrics(report: Dict) -> Dict:
     """Extract key metrics from report."""
     processing = report.get("processing", {})
-    video_props = report.get("video_properties", {})
+    # video_properties not currently used here
     detector_stats = report.get("detector_stats", {})
     summary = report.get("summary", {})
     gender_total = summary.get("gender_counts_total", {})
     gender_metrics = report.get("gender_metrics", {})
-    
-    total_gender = gender_total.get("M", 0) + gender_total.get("F", 0) + gender_total.get("Unknown", 0)
-    
+
+    total_gender = (
+        gender_total.get("M", 0)
+        + gender_total.get("F", 0)
+        + gender_total.get("Unknown", 0)
+    )
+
     return {
         "time_s": round(float(processing.get("time_seconds", 0.0)), 2),
         "avg_ms": round(float(processing.get("avg_time_per_frame_ms", 0.0)), 2),
@@ -59,28 +62,40 @@ def extract_metrics(report: Dict) -> Dict:
         "M": int(gender_total.get("M", 0)),
         "F": int(gender_total.get("F", 0)),
         "U": int(gender_total.get("Unknown", 0)),
-        "M_pct": round(100 * gender_total.get("M", 0) / total_gender, 1) if total_gender > 0 else 0,
-        "F_pct": round(100 * gender_total.get("F", 0) / total_gender, 1) if total_gender > 0 else 0,
-        "U_pct": round(100 * gender_total.get("Unknown", 0) / total_gender, 1) if total_gender > 0 else 0,
+        "M_pct": round(100 * gender_total.get("M", 0) / total_gender, 1)
+        if total_gender > 0
+        else 0,
+        "F_pct": round(100 * gender_total.get("F", 0) / total_gender, 1)
+        if total_gender > 0
+        else 0,
+        "U_pct": round(100 * gender_total.get("Unknown", 0) / total_gender, 1)
+        if total_gender > 0
+        else 0,
         "gender_calls": int(gender_metrics.get("total_calls", 0)),
         "gender_p50_ms": round(float(gender_metrics.get("p50_latency_ms", 0)), 1),
         "gender_p95_ms": round(float(gender_metrics.get("p95_latency_ms", 0)), 1),
     }
 
 
-def print_comparison_table(scenarios: List[Tuple[str, str]], results: List[Optional[Dict]], baseline_idx: int = 0):
+def print_comparison_table(
+    scenarios: List[Tuple[str, str]],
+    results: List[Optional[Dict[str, Any]]],
+    baseline_idx: int = 0,
+) -> None:
     """Print formatted comparison table."""
     baseline = results[baseline_idx]
     if baseline is None:
         print("ERROR: Baseline report not found!")
         return
-    
-    print("\n" + "="*120)
+
+    print("\n" + "=" * 120)
     print("IMPROVEMENT EXPERIMENTS COMPARISON REPORT")
-    print("="*120)
+    print("=" * 120)
     print(f"\nBaseline: {scenarios[baseline_idx][1]}")
-    print(f"Video: Processed {baseline['proc_frames']} frames, {baseline['unique_tracks']} unique tracks\n")
-    
+    print(
+        f"Video: Processed {baseline['proc_frames']} frames, {baseline['unique_tracks']} unique tracks\n"
+    )
+
     # Header
     header = (
         f"{'Scenario':<30} "
@@ -99,7 +114,7 @@ def print_comparison_table(scenarios: List[Tuple[str, str]], results: List[Optio
     )
     print(header)
     print("-" * 120)
-    
+
     # Baseline row
     b = baseline
     print(
@@ -118,27 +133,29 @@ def print_comparison_table(scenarios: List[Tuple[str, str]], results: List[Optio
         f"{b['gender_p95_ms']:<9.1f} "
         f"[BASELINE]"
     )
-    
+
     # Improvement rows
     for i, (scenario_id, scenario_name) in enumerate(scenarios):
         if i == baseline_idx:
             continue
-        
+
         r = results[i]
         if r is None:
-            print(f"{scenario_name:<30} {'N/A':<8} {'N/A':<8} {'N/A':<6} {'N/A':<7} {'N/A':<5} {'N/A':<5} {'N/A':<5} {'N/A':<5} {'N/A':<5} {'N/A':<5} {'N/A':<8} {'N/A':<9}")
+            print(
+                f"{scenario_name:<30} {'N/A':<8} {'N/A':<8} {'N/A':<6} {'N/A':<7} {'N/A':<5} {'N/A':<5} {'N/A':<5} {'N/A':<5} {'N/A':<5} {'N/A':<5} {'N/A':<8} {'N/A':<9}"
+            )
             continue
-        
+
         # Calculate differences
-        time_diff = r['time_s'] - b['time_s']
-        ms_diff = r['avg_ms'] - b['avg_ms']
-        fps_diff = r['fps'] - b['fps']
-        m_diff = r['M'] - b['M']
-        f_diff = r['F'] - b['F']
-        u_diff = r['U'] - b['U']
-        m_pct_diff = r['M_pct'] - b['M_pct']
-        f_pct_diff = r['F_pct'] - b['F_pct']
-        
+        time_diff = r["time_s"] - b["time_s"]
+        ms_diff = r["avg_ms"] - b["avg_ms"]
+        fps_diff = r["fps"] - b["fps"]
+        m_diff = r["M"] - b["M"]
+        f_diff = r["F"] - b["F"]
+        u_diff = r["U"] - b["U"]
+        m_pct_diff = r["M_pct"] - b["M_pct"]
+        f_pct_diff = r["F_pct"] - b["F_pct"]
+
         time_str = f"{r['time_s']} ({time_diff:+.1f})"
         ms_str = f"{r['avg_ms']:.1f} ({ms_diff:+.1f})"
         fps_str = f"{r['fps']:.1f} ({fps_diff:+.1f})"
@@ -147,7 +164,7 @@ def print_comparison_table(scenarios: List[Tuple[str, str]], results: List[Optio
         u_str = f"{r['U']} ({u_diff:+d})"
         m_pct_str = f"{r['M_pct']:.1f} ({m_pct_diff:+.1f})"
         f_pct_str = f"{r['F_pct']:.1f} ({f_pct_diff:+.1f})"
-        
+
         print(
             f"{scenario_name:<30} "
             f"{time_str:<15} "
@@ -163,7 +180,7 @@ def print_comparison_table(scenarios: List[Tuple[str, str]], results: List[Optio
             f"{r['gender_p50_ms']:<8.1f} "
             f"{r['gender_p95_ms']:<9.1f}"
         )
-    
+
     print("-" * 120)
     print("\nNotes:")
     print("  - Values in parentheses show difference from baseline")
@@ -174,29 +191,39 @@ def print_comparison_table(scenarios: List[Tuple[str, str]], results: List[Optio
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Summarize improvement experiments")
-    ap.add_argument("--base", type=Path, required=True, help="Base output/videos directory")
-    ap.add_argument("--video", type=str, required=True, help="Video stem (no extension)")
-    ap.add_argument("--output", type=Path, help="Optional: Save markdown report to file")
+    ap.add_argument(
+        "--base", type=Path, required=True, help="Base output/videos directory"
+    )
+    ap.add_argument(
+        "--video", type=str, required=True, help="Video stem (no extension)"
+    )
+    ap.add_argument(
+        "--output", type=Path, help="Optional: Save markdown report to file"
+    )
     args = ap.parse_args()
-    
-    results = []
+
+    results: List[Optional[Dict[str, Any]]]= []
     for scenario_id, _ in IMPROVEMENT_SCENARIOS:
         rpt = load_report(args.base, scenario_id, args.video)
         if rpt is None:
             results.append(None)
         else:
             results.append(extract_metrics(rpt))
-    
+
     print_comparison_table(IMPROVEMENT_SCENARIOS, results)
-    
+
     if args.output:
         # Save as markdown
         with args.output.open("w") as f:
             f.write("# Improvement Experiments Comparison Report\n\n")
             f.write(f"**Baseline:** {IMPROVEMENT_SCENARIOS[0][1]}\n\n")
-            f.write("| Scenario | Time(s) | Avg(ms) | FPS | Tracks | M | F | U | M% | F% | U% | P50(ms) | P95(ms) |\n")
-            f.write("|----------|---------|---------|-----|--------|---|---|---|----|----|----|---------|---------|\n")
-            
+            f.write(
+                "| Scenario | Time(s) | Avg(ms) | FPS | Tracks | M | F | U | M% | F% | U% | P50(ms) | P95(ms) |\n"
+            )
+            f.write(
+                "|----------|---------|---------|-----|--------|---|---|---|----|----|----|---------|---------|\n"
+            )
+
             baseline = results[0]
             if baseline:
                 f.write(
@@ -207,8 +234,10 @@ def main() -> None:
                     f"{baseline['M_pct']:.1f} | {baseline['F_pct']:.1f} | {baseline['U_pct']:.1f} | "
                     f"{baseline['gender_p50_ms']:.1f} | {baseline['gender_p95_ms']:.1f} |\n"
                 )
-            
-            for i, (scenario_id, scenario_name) in enumerate(IMPROVEMENT_SCENARIOS[1:], 1):
+
+            for i, (scenario_id, scenario_name) in enumerate(
+                IMPROVEMENT_SCENARIOS[1:], 1
+            ):
                 r = results[i]
                 if r:
                     f.write(
@@ -217,10 +246,9 @@ def main() -> None:
                         f"{r['M_pct']:.1f} | {r['F_pct']:.1f} | {r['U_pct']:.1f} | "
                         f"{r['gender_p50_ms']:.1f} | {r['gender_p95_ms']:.1f} |\n"
                     )
-        
+
         print(f"\nReport saved to: {args.output}")
 
 
 if __name__ == "__main__":
     main()
-

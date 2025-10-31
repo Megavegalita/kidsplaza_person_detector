@@ -8,9 +8,8 @@ Lightweight in-memory counters and histograms suitable for periodic logging.
 from __future__ import annotations
 
 import threading
-import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 
 def _percentile(values: List[float], p: float) -> float:

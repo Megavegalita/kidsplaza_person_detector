@@ -7,7 +7,6 @@ This script tests YOLOv8n model performance on CPU and MPS (Metal GPU).
 
 import logging
 import time
-from pathlib import Path
 
 import torch
 from ultralytics import YOLO
@@ -44,7 +43,7 @@ def benchmark_model_inference(
     # Actual benchmark runs
     for i in range(num_runs):
         start_time = time.time()
-        results = model.predict(test_image, device=device, verbose=False)
+        _ = model.predict(test_image, device=device, verbose=False)
         elapsed = time.time() - start_time
         times.append(elapsed)
 
@@ -85,7 +84,7 @@ def main():
     device_cpu = "cpu"
     device_mps = "mps" if torch.backends.mps.is_available() else None
 
-    logger.info(f"CPU available: True")
+    logger.info("CPU available: True")
     logger.info(f"MPS available: {torch.backends.mps.is_available()}")
     logger.info("")
 
