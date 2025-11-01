@@ -35,8 +35,9 @@ from src.modules.demographics.keras_tf_gender_classifier import (  # noqa: E402
 from src.modules.demographics.metrics import GenderMetrics  # noqa: E402
 from src.modules.detection.detector import Detector  # noqa: E402
 from src.modules.reid.cache import ReIDCache  # noqa: E402
-from src.modules.reid.embedder import ArcFaceEmbedder, ReIDEmbedder  # noqa: E402
-from src.modules.reid.integration import integrate_reid_for_tracks  # noqa: E402
+from src.modules.reid.embedder import ReIDEmbedder  # noqa: E402
+from src.modules.reid.arcface_embedder import ArcFaceEmbedder  # noqa: E402
+from src.modules.reid.integrator import integrate_reid_for_tracks  # noqa: E402
 from src.modules.tracking.tracker import Tracker  # noqa: E402
 
 logging.basicConfig(
