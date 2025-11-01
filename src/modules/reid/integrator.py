@@ -55,7 +55,7 @@ def integrate_reid_for_tracks(
         return  # disabled
 
     try:
-        from modules.detection.image_processor import ImageProcessor
+        from src.modules.detection.image_processor import ImageProcessor  # noqa: E402
 
         processor = ImageProcessor()
         embeds_done = 0

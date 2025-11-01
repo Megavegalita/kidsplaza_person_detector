@@ -856,16 +856,20 @@ def main() -> None:
             logger.error("Channel %d not found in config", args.channel_id)
             sys.exit(1)
 
-        # Build RTSP URL
-        server_info = camera_config.get_server_info()
-        credentials = camera_config.get_credentials()
-        rtsp_url = build_rtsp_url(
-            server_info["host"],
-            server_info["port"],
-            args.channel_id,
-            credentials,
-        )
+        # Use RTSP URL from config if available, otherwise build it
+        rtsp_url = channel_config.get("rtsp_url")
+        if not rtsp_url:
+            server_info = camera_config.get_server_info()
+            credentials = camera_config.get_credentials()
+            rtsp_url = build_rtsp_url(
+                server_info["host"],
+                server_info["port"],
+                args.channel_id,
+                credentials,
+            )
+            logger.warning("Using auto-built RTSP URL (not in config)")
 
+        credentials = camera_config.get_credentials()
         logger.info(
             "RTSP URL: %s", rtsp_url.replace(credentials.get("password", ""), "***")
         )
