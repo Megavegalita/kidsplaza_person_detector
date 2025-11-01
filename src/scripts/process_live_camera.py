@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, cast
 
+import cv2  # noqa: E402
 import numpy as np
 
 # Add src to path for imports
@@ -96,6 +97,7 @@ class LiveCameraProcessor:
         redis_url: Optional[str] = None,
         max_frames: Optional[int] = None,
         reconnect_interval_seconds: float = 5.0,
+        display: bool = False,
     ) -> None:
         """
         Initialize live camera processor.
@@ -239,6 +241,9 @@ class LiveCameraProcessor:
         self.gender_adaptive_enabled = bool(gender_adaptive_enabled)
         self.gender_queue_high_watermark = int(gender_queue_high_watermark)
         self.gender_queue_low_watermark = int(gender_queue_low_watermark)
+
+        # Display flag
+        self.display = bool(display)
 
         # Shutdown flag
         self._shutdown_requested = False
@@ -393,6 +398,15 @@ class LiveCameraProcessor:
                         track_id_to_gender_conf,
                     )
 
+                # Display frame if enabled
+                if self.display and annotated is not None:
+                    window_name = f"Live Stream - Channel {self.channel_id}"
+                    cv2.imshow(window_name, annotated)
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == ord("q"):
+                        logger.info("User pressed 'q', stopping processing.")
+                        break
+
                 # Database storage (reuse logic from VideoProcessor)
                 if self.db_enable and self.db_manager is not None:
                     self._store_detections(
@@ -422,6 +436,9 @@ class LiveCameraProcessor:
                         camera_reader.release()
                 except Exception:
                     pass
+
+            if self.display:
+                cv2.destroyAllWindows()
 
             # Final DB flush
             if self.db_enable and self.db_manager is not None:
@@ -835,6 +852,11 @@ def main() -> None:
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Logging level",
     )
+    parser.add_argument(
+        "--display",
+        action="store_true",
+        help="Display video frames in a window (press 'q' to quit)",
+    )
 
     args = parser.parse_args()
 
@@ -895,6 +917,7 @@ def main() -> None:
             "output_dir": args.output,
             "run_id": args.run_id,
             "max_frames": args.max_frames,
+            "display": args.display,
         }
 
         # Apply preset if specified
