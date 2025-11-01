@@ -30,6 +30,27 @@ Or use the helper script:
 ./scripts/query_tracks.sh
 ```
 
+### `dashboard_summary.sql`
+**Dashboard-style comprehensive summary** with multiple sections:
+0. **KEY METRICS** (⭐ PRIMARY) - Unique track counts: unique_total, unique_male, unique_female, unique_unknown
+1. **Overview Statistics** - Total tracks, cameras, detections, time range
+2. **Gender Distribution** - Latest run and overall statistics
+3. **Track Statistics** - Aggregated track metrics
+4. **Detection Statistics by Time** - Hourly breakdown (last 24h)
+5. **Top Tracks** - Most active tracks by detection count
+6. **Camera Statistics** - Per-camera breakdown
+7. **Recent Runs Summary** - Last 10 processing runs
+8. **Gender Confidence Distribution** - Confidence ranges analysis
+9. **Track Duration Statistics** - Duration metrics by gender
+10. **Daily Summary** - Last 7 days overview
+
+**Usage:**
+```bash
+psql -h localhost -p 5432 -U autoeyes -d gender_analysis -f database/queries/dashboard_summary.sql
+```
+
+This query provides a complete dashboard view suitable for monitoring and reporting.
+
 ## Connection Details
 
 - **Host**: `localhost`
