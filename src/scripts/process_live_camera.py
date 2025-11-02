@@ -358,10 +358,11 @@ class LiveCameraProcessor:
                     frame, return_image=self.display
                 )
                 
-                # Filter false positives: confidence, aspect ratio, and size checks
+                # Filter false positives: confidence, aspect ratio, size, and area checks
                 filtered_detections = []
                 for d in detections:
                     conf = d.get("confidence", 0.0)
+                    # Strict confidence check - must be above threshold
                     if conf < self.conf_threshold:
                         continue
                     
@@ -369,25 +370,74 @@ class LiveCameraProcessor:
                     bbox = d.get("bbox", [])
                     if len(bbox) < 4:
                         continue
-                    x1, y1, x2, y2 = bbox
-                    w = float(x2 - x1)
-                    h = float(y2 - y1)
                     
-                    # Filter by aspect ratio: person is usually taller than wide
-                    # Motorcycles are usually wider than tall
-                    if w > 0 and h > 0:
-                        aspect_ratio = w / h
-                        # Person aspect ratio typically 0.3-0.7 (taller than wide)
-                        # Motorcycle aspect ratio typically > 0.8 (wider than tall)
-                        if aspect_ratio > 0.75:  # Too wide, likely not a person
-                            continue
-                        # Filter very small detections (likely false positives)
-                        if h < 50 or w < 30:  # Too small to be a person
-                            continue
-                        # Filter very large detections (likely errors)
-                        if h > frame_height * 0.9 or w > frame_width * 0.9:
-                            continue
+                    # Convert numpy array to list if needed
+                    if hasattr(bbox, 'tolist'):
+                        bbox = bbox.tolist()
                     
+                    x1, y1, x2, y2 = float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])
+                    w = x2 - x1
+                    h = y2 - y1
+                    
+                    # Validate dimensions
+                    if w <= 0 or h <= 0:
+                        continue
+                    
+                    # Calculate metrics
+                    aspect_ratio = w / h
+                    area = w * h
+                    frame_area = frame_width * frame_height
+                    area_ratio = area / frame_area if frame_area > 0 else 0
+                    
+                    # STRICT FILTERING RULES:
+                    
+                    # 1. Aspect ratio: Person is typically taller than wide (0.25-0.65)
+                    #    Motorcycles are wider than tall (> 0.70)
+                    #    Make threshold stricter
+                    if aspect_ratio > 0.65:  # Stricter: was 0.75, now 0.65
+                        if frame_num % 50 == 0:  # Log occasionally
+                            logger.debug(
+                                "Filtered by aspect ratio: %.3f (w=%.1f, h=%.1f, conf=%.3f)",
+                                aspect_ratio, w, h, conf
+                            )
+                        continue
+                    
+                    # 2. Minimum size: Person must be reasonably sized
+                    #    Increase minimum height requirement
+                    if h < 80 or w < 40:  # Stricter: was 50/30, now 80/40
+                        if frame_num % 50 == 0:
+                            logger.debug(
+                                "Filtered by size: w=%.1f, h=%.1f, conf=%.3f", w, h, conf
+                            )
+                        continue
+                    
+                    # 3. Maximum size: Filter unrealistically large detections
+                    if h > frame_height * 0.85 or w > frame_width * 0.85:
+                        continue
+                    
+                    # 4. Area ratio: Person shouldn't take up too little or too much space
+                    #    Very small area ratio might indicate false positive
+                    if area_ratio < 0.002:  # Less than 0.2% of frame is suspicious
+                        if frame_num % 50 == 0:
+                            logger.debug(
+                                "Filtered by area ratio: %.4f (area=%d, conf=%.3f)",
+                                area_ratio, int(area), conf
+                            )
+                        continue
+                    if area_ratio > 0.7:  # More than 70% of frame is suspicious
+                        continue
+                    
+                    # 5. Height must be significantly greater than width for person
+                    #    Additional check: h should be at least 1.5x w for standing person
+                    if h < w * 1.3:  # Person height should be at least 1.3x width
+                        if frame_num % 50 == 0:
+                            logger.debug(
+                                "Filtered by height/width ratio: h=%.1f, w=%.1f, ratio=%.2f, conf=%.3f",
+                                h, w, h/w, conf
+                            )
+                        continue
+                    
+                    # All checks passed
                     filtered_detections.append(d)
                 
                 detections = filtered_detections
@@ -940,8 +990,8 @@ def main() -> None:
     parser.add_argument(
         "--conf-threshold",
         type=float,
-        default=0.70,
-        help="Detection confidence threshold (default: 0.70, increase to reduce false positives)",
+        default=0.75,
+        help="Detection confidence threshold (default: 0.75, increase to reduce false positives)",
     )
 
     args = parser.parse_args()
@@ -1005,7 +1055,7 @@ def main() -> None:
             "max_frames": args.max_frames,
             "display": args.display,
             "display_fps": getattr(args, "display_fps", 12.0),  # Lower default for smoother display
-            "conf_threshold": getattr(args, "conf_threshold", 0.70),  # Increase to reduce false positives
+            "conf_threshold": getattr(args, "conf_threshold", 0.75),  # Increase to reduce false positives
         }
 
         # Apply preset if specified
@@ -1038,7 +1088,7 @@ def main() -> None:
             }
             # Don't override conf_threshold if explicitly set
             if "conf_threshold" not in processor_args:
-                preset_update["conf_threshold"] = 0.70  # Higher threshold for preset to reduce false positives
+                preset_update["conf_threshold"] = 0.75  # Higher threshold for preset to reduce false positives
             processor_args.update(preset_update)
 
         processor = LiveCameraProcessor(**processor_args)
