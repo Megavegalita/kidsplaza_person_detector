@@ -36,6 +36,7 @@ from src.modules.demographics.keras_tf_gender_classifier import (  # noqa: E402
 from src.modules.demographics.metrics import GenderMetrics  # noqa: E402
 from src.modules.detection.detector import Detector  # noqa: E402
 from src.modules.detection.image_processor import ImageProcessor  # noqa: E402
+from src.modules.detection.face_detector_full import FaceDetectorFull  # noqa: E402
 from src.modules.reid.cache import ReIDCache  # noqa: E402
 from src.modules.reid.embedder import ReIDEmbedder  # noqa: E402
 from src.modules.reid.arcface_embedder import ArcFaceEmbedder  # noqa: E402
@@ -130,11 +131,24 @@ class LiveCameraProcessor:
 
         self.conf_threshold = conf_threshold
 
-        # Initialize detector
-        self.detector = Detector(model_path=model_path, conf_threshold=conf_threshold)
+        # Initialize face-based detector (replaces YOLOv8 for person detection)
+        # This eliminates false positives like motorcycles since we only detect faces
+        self.face_detector_full = FaceDetectorFull(
+            min_detection_confidence=conf_threshold,
+            model_selection=1,  # Full range (2-5m) for CCTV cameras
+            body_expand_ratio=2.5,  # Expand face bbox by 2.5x for full body
+            body_expand_vertical=0.4,  # Expand downward more
+        )
+        
+        # Keep old detector for compatibility (not used if face detection enabled)
+        self.use_face_detection = True  # Flag to use face detection instead
+        self.detector = None  # YOLOv8 detector (disabled)
         
         # Initialize image processor for drawing detections
         self.processor = ImageProcessor()
+        
+        logger.info("Using face-based person detection (MediaPipe)")
+        logger.info("Face detection confidence threshold: %.2f", conf_threshold)
 
         # Initialize tracker
         self.tracker = Tracker(
@@ -261,11 +275,7 @@ class LiveCameraProcessor:
         # Resize for display to reduce lag (max width 1280)
         self.display_max_width = 1280
         
-        # Face verification for false positive filtering
-        # Track face detection status per track_id
-        self._track_face_verification: Dict[int, List[bool]] = {}  # track_id -> [face_detected, ...]
-        self._face_verification_window = 15  # Verify face in last N frames (increased)
-        self._face_verification_threshold = 5  # Require at least N face detections in window (stricter)
+        # Face verification no longer needed - using face-based detection directly
 
         # Shutdown flag
         self._shutdown_requested = False
@@ -364,37 +374,37 @@ class LiveCameraProcessor:
                 # Process frame (same logic as VideoProcessor)
                 frame_height, frame_width = frame.shape[:2]
 
-                # Run detection - only create annotated frame if display is enabled
-                detections, annotated = self.detector.detect(
-                    frame, return_image=self.display
-                )
+                # Run face-based detection (replaces YOLOv8)
+                # This detects faces first, then estimates full body bbox
+                detections = []
+                if self.use_face_detection and self.face_detector_full is not None:
+                    detections = self.face_detector_full.detect_persons_from_faces(frame)
+                    # Convert to format expected by rest of pipeline
+                    for d in detections:
+                        # bbox is already in format [x1, y1, x2, y2]
+                        pass  # Already in correct format
+                else:
+                    # Fallback to YOLOv8 (if enabled)
+                    if self.detector is not None:
+                        detections, annotated = self.detector.detect(
+                            frame, return_image=self.display
+                        )
                 
-                # Store original detections for debugging
-                original_count = len(detections)
+                # Create annotated frame if display enabled
+                annotated = None
+                if self.display and len(detections) > 0:
+                    annotated = self.processor.draw_detections(frame, detections)
                 
-                # Filter false positives: confidence, aspect ratio, size, and area checks
+                # Face-based detection already filters out non-faces
+                # No need for complex geometric filtering - faces are reliable indicators
+                # Only basic validation needed
                 filtered_detections = []
-                filtered_reasons = {
-                    "confidence": 0,
-                    "aspect_ratio": 0,
-                    "size": 0,
-                    "area_ratio": 0,
-                    "height_width_ratio": 0,
-                }
-                
                 for d in detections:
-                    conf = d.get("confidence", 0.0)
-                    # Strict confidence check - must be above threshold
-                    if conf < self.conf_threshold:
-                        filtered_reasons["confidence"] += 1
-                        continue
-                    
-                    # Get bbox dimensions
+                    # Basic validation: ensure bbox is valid
                     bbox = d.get("bbox", [])
                     if len(bbox) < 4:
                         continue
                     
-                    # Convert numpy array to list if needed
                     if hasattr(bbox, 'tolist'):
                         bbox = bbox.tolist()
                     
@@ -406,106 +416,27 @@ class LiveCameraProcessor:
                     if w <= 0 or h <= 0:
                         continue
                     
-                    # Calculate metrics
-                    aspect_ratio = w / h
-                    area = w * h
-                    frame_area = frame_width * frame_height
-                    area_ratio = area / frame_area if frame_area > 0 else 0
-                    
-                    # STRICT FILTERING RULES:
-                    
-                    # 1. Aspect ratio: Person is typically taller than wide (0.25-0.50)
-                    #    Motorcycles are wider than tall (> 0.55)
-                    #    Make threshold EXTREMELY strict
-                    if aspect_ratio > 0.50:  # EXTREMELY strict: was 0.55, now 0.50
-                        filtered_reasons["aspect_ratio"] += 1
-                        if frame_num % 50 == 0:  # Log occasionally
-                            logger.debug(
-                                "Filtered by aspect ratio: %.3f (w=%.1f, h=%.1f, conf=%.3f)",
-                                aspect_ratio, w, h, conf
-                            )
+                    # Basic size check: filter tiny detections
+                    if h < 50 or w < 30:
                         continue
                     
-                    # 2. Minimum size: Person must be reasonably sized
-                    #    Increase minimum height requirement
-                    if h < 80 or w < 40:  # Stricter: was 50/30, now 80/40
-                        filtered_reasons["size"] += 1
-                        if frame_num % 50 == 0:
-                            logger.debug(
-                                "Filtered by size: w=%.1f, h=%.1f, conf=%.3f", w, h, conf
-                            )
+                    # Basic max size check
+                    if h > frame_height * 0.9 or w > frame_width * 0.9:
                         continue
                     
-                    # 3. Maximum size: Filter unrealistically large detections
-                    if h > frame_height * 0.85 or w > frame_width * 0.85:
-                        continue
-                    
-                    # 4. Area ratio: Person shouldn't take up too little or too much space
-                    #    Very small area ratio might indicate false positive
-                    if area_ratio < 0.002:  # Less than 0.2% of frame is suspicious
-                        filtered_reasons["area_ratio"] += 1
-                        if frame_num % 50 == 0:
-                            logger.debug(
-                                "Filtered by area ratio: %.4f (area=%d, conf=%.3f)",
-                                area_ratio, int(area), conf
-                            )
-                        continue
-                    if area_ratio > 0.7:  # More than 70% of frame is suspicious
-                        continue
-                    
-                    # 5. Height must be significantly greater than width for person
-                    #    Additional check: h should be at least 1.7x w for standing person
-                    if h < w * 1.7:  # VERY STRICT: Person height should be at least 1.7x width (was 1.5x)
-                        filtered_reasons["height_width_ratio"] += 1
-                        if frame_num % 50 == 0:
-                            logger.debug(
-                                "Filtered by height/width ratio: h=%.1f, w=%.1f, ratio=%.2f, conf=%.3f",
-                                h, w, h/w, conf
-                            )
-                        continue
-                    
-                    # All checks passed
                     filtered_detections.append(d)
                 
                 detections = filtered_detections
                 
-                # Log filtering stats periodically
-                filtered_count = original_count - len(detections)
-                if original_count > 0 and frame_num % 100 == 0:
-                    if filtered_count > 0:
-                        logger.info(
-                            "Filtering: %d/%d detections filtered (conf=%d, aspect=%d, size=%d, area=%d, hw=%d)",
-                            filtered_count, original_count,
-                            filtered_reasons["confidence"],
-                            filtered_reasons["aspect_ratio"],
-                            filtered_reasons["size"],
-                            filtered_reasons["area_ratio"],
-                            filtered_reasons["height_width_ratio"],
-                        )
-                    elif len(detections) > 0:
-                        # Log when detections pass all filters (for debugging false positives)
-                        logger.debug(
-                            "Frame %d: %d detections passed all filters",
-                            frame_num, len(detections)
-                        )
-                        for d in detections:
-                            bbox = d.get("bbox", [])
-                            if len(bbox) >= 4:
-                                if hasattr(bbox, 'tolist'):
-                                    bbox = bbox.tolist()
-                                x1, y1, x2, y2 = float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])
-                                w, h = x2 - x1, y2 - y1
-                                aspect = w / h if h > 0 else 0
-                                logger.debug(
-                                    "  Detection: conf=%.3f, w=%.1f, h=%.1f, aspect=%.3f, h/w=%.2f",
-                                    d.get("confidence", 0), w, h, aspect, h/w if w > 0 else 0
-                                )
+                # Log stats periodically
+                if len(detections) > 0 and frame_num % 100 == 0:
+                    logger.info(
+                        "Face-based detection: %d persons detected (from faces)",
+                        len(detections)
+                    )
                 
-                # Re-create annotated frame if display enabled and we filtered detections
-                if self.display and annotated is None and len(detections) > 0:
-                    annotated = self.processor.draw_detections(frame, detections)
-                elif self.display and annotated is not None and len(detections) > 0:
-                    # Update annotated frame with filtered detections
+                # Create annotated frame if display enabled
+                if self.display and len(detections) > 0:
                     annotated = self.processor.draw_detections(frame, detections)
 
                 # Run tracking
@@ -514,100 +445,9 @@ class LiveCameraProcessor:
                 )
                 detections = tracked_detections
                 
-                # Face verification: Check if tracked detections have faces
-                # This helps eliminate false positives (e.g., motorcycles)
-                # Check every 2 frames (more frequent for better filtering)
-                if self.face_detector is not None and len(detections) > 0 and frame_num % 2 == 0:
-                    verified_detections = []
-                    for d in detections:
-                        track_id = d.get("track_id")
-                        if track_id is None:
-                            verified_detections.append(d)
-                            continue
-                        
-                        t_id = int(track_id)
-                        
-                        # Get person crop for face detection
-                        bbox = d.get("bbox", [])
-                        if len(bbox) < 4:
-                            verified_detections.append(d)
-                            continue
-                        
-                        if hasattr(bbox, 'tolist'):
-                            bbox = bbox.tolist()
-                        x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
-                        
-                        # Clamp to frame boundaries
-                        x1 = max(0, min(x1, frame_width - 1))
-                        y1 = max(0, min(y1, frame_height - 1))
-                        x2 = max(0, min(x2, frame_width))
-                        y2 = max(0, min(y2, frame_height))
-                        
-                        if x2 > x1 and y2 > y1:
-                            person_crop = frame[y1:y2, x1:x2]
-                            if person_crop.size > 0:
-                                # Try to detect face
-                                face_result = self.face_detector.detect_face(person_crop)
-                                face_detected = face_result is not None
-                            else:
-                                face_detected = False
-                        else:
-                            face_detected = False
-                        
-                        # Update face verification history for this track
-                        if t_id not in self._track_face_verification:
-                            self._track_face_verification[t_id] = []
-                        self._track_face_verification[t_id].append(face_detected)
-                        
-                        # Keep only last N frames of history
-                        if len(self._track_face_verification[t_id]) > self._face_verification_window:
-                            self._track_face_verification[t_id] = self._track_face_verification[t_id][-self._face_verification_window:]
-                        
-                        # Verify: require at least threshold face detections in window
-                        face_history = self._track_face_verification[t_id]
-                        face_count = sum(face_history)
-                        
-                        # STRICT FACE VERIFICATION:
-                        # For tracks with enough history, require minimum face detections
-                        if len(face_history) >= self._face_verification_window:
-                            # Established tracks MUST have minimum face detections
-                            if face_count >= self._face_verification_threshold:
-                                verified_detections.append(d)
-                            else:
-                                # Filter out - likely false positive (motorcycle, etc.)
-                                if frame_num % 50 == 0:  # Log more frequently
-                                    logger.info(
-                                        "Filtered track %d by face verification: %d/%d faces (required: %d)",
-                                        t_id, face_count, len(face_history), self._face_verification_threshold
-                                    )
-                        elif len(face_history) >= 5:
-                            # Tracks with 5-14 frames history: require at least 1 face
-                            if face_count >= 1:
-                                verified_detections.append(d)
-                            else:
-                                # Filter out - no face detected in 5+ frames
-                                if frame_num % 50 == 0:
-                                    logger.info(
-                                        "Filtered new track %d: no face in %d frames",
-                                        t_id, len(face_history)
-                                    )
-                        else:
-                            # Very new tracks (< 5 frames): give a chance but still prefer faces
-                            if face_count > 0:
-                                verified_detections.append(d)
-                            # For tracks with 0 faces in first few frames, be more strict
-                            elif len(face_history) >= 3 and face_count == 0:
-                                # After 3 frames with no face, filter out
-                                if frame_num % 50 == 0:
-                                    logger.info(
-                                        "Filtered very new track %d: no face in first %d frames",
-                                        t_id, len(face_history)
-                                    )
-                            else:
-                                # Keep for now (only 1-2 frames old)
-                                verified_detections.append(d)
-                    
-                    detections = verified_detections
+                # Face verification no longer needed since we're using face-based detection
+                # All detections already have faces (detected from faces directly)
+                # This eliminates false positives like motorcycles naturally
 
                 # Integrate Re-ID
                 if (
@@ -1052,6 +892,8 @@ class LiveCameraProcessor:
             self.gender_worker.shutdown()
         if self.db_manager is not None:
             self.db_manager.close()
+        if self.face_detector_full is not None:
+            self.face_detector_full.release()
         if self.detector is not None:
             self.detector.release()
         logger.info("Resources released")
