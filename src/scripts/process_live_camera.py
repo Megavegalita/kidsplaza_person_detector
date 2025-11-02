@@ -98,6 +98,7 @@ class LiveCameraProcessor:
         max_frames: Optional[int] = None,
         reconnect_interval_seconds: float = 5.0,
         display: bool = False,
+        display_fps: float = 15.0,
     ) -> None:
         """
         Initialize live camera processor.
@@ -242,8 +243,14 @@ class LiveCameraProcessor:
         self.gender_queue_high_watermark = int(gender_queue_high_watermark)
         self.gender_queue_low_watermark = int(gender_queue_low_watermark)
 
-        # Display flag
+        # Display settings
         self.display = bool(display)
+        self.display_fps = max(1.0, float(display_fps))  # Minimum 1 FPS
+        self.display_frame_skip = max(1, int(24.0 / self.display_fps))  # Skip frames for display
+        self._last_display_time = 0.0
+        self._display_frame_count = 0
+        # Resize for display to reduce lag (max width 1280)
+        self.display_max_width = 1280
 
         # Shutdown flag
         self._shutdown_requested = False
@@ -342,8 +349,14 @@ class LiveCameraProcessor:
                 # Process frame (same logic as VideoProcessor)
                 frame_height, frame_width = frame.shape[:2]
 
-                # Run detection
+                # Run detection with higher confidence threshold to reduce false positives
                 detections, annotated = self.detector.detect(frame, return_image=True)
+                
+                # Additional filtering: remove detections with very low confidence
+                # This adds a safety layer to filter out false positives like motorcycles
+                detections = [
+                    d for d in detections if d.get("confidence", 0.0) >= self.conf_threshold
+                ]
 
                 # Run tracking
                 tracked_detections = self.tracker.update(
@@ -398,10 +411,28 @@ class LiveCameraProcessor:
                         track_id_to_gender_conf,
                     )
 
-                # Display frame if enabled
+                # Display frame if enabled (limit update rate and resize to reduce lag)
                 if self.display and annotated is not None:
-                    window_name = f"Live Stream - Channel {self.channel_id}"
-                    cv2.imshow(window_name, annotated)
+                    current_time = time.time()
+                    # Only update display at specified FPS
+                    if (
+                        current_time - self._last_display_time >= 1.0 / self.display_fps
+                    ) or self._last_display_time == 0.0:
+                        window_name = f"Live Stream - Channel {self.channel_id}"
+                        # Resize frame for display to reduce lag
+                        display_frame = annotated.copy()
+                        h, w = display_frame.shape[:2]
+                        if w > self.display_max_width:
+                            scale = self.display_max_width / w
+                            new_w = int(w * scale)
+                            new_h = int(h * scale)
+                            display_frame = cv2.resize(
+                                display_frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR
+                            )
+                        cv2.imshow(window_name, display_frame)
+                        self._last_display_time = current_time
+                        self._display_frame_count += 1
+                    # Always check for 'q' key
                     key = cv2.waitKey(1) & 0xFF
                     if key == ord("q"):
                         logger.info("User pressed 'q', stopping processing.")
@@ -857,6 +888,18 @@ def main() -> None:
         action="store_true",
         help="Display video frames in a window (press 'q' to quit)",
     )
+    parser.add_argument(
+        "--display-fps",
+        type=float,
+        default=12.0,
+        help="Display update rate (FPS) to reduce lag (default: 12.0)",
+    )
+    parser.add_argument(
+        "--conf-threshold",
+        type=float,
+        default=0.70,
+        help="Detection confidence threshold (default: 0.70, increase to reduce false positives)",
+    )
 
     args = parser.parse_args()
 
@@ -918,38 +961,42 @@ def main() -> None:
             "run_id": args.run_id,
             "max_frames": args.max_frames,
             "display": args.display,
+            "display_fps": getattr(args, "display_fps", 12.0),  # Lower default for smoother display
+            "conf_threshold": getattr(args, "conf_threshold", 0.70),  # Increase to reduce false positives
         }
 
         # Apply preset if specified
         if args.preset == "gender_main_v1":
-            processor_args.update(
-                {
-                    "reid_enable": True,
-                    "reid_every_k": 20,
-                    "reid_ttl_seconds": 60,
-                    "reid_similarity_threshold": 0.65,
-                    "reid_aggregation_method": "avg_sim",
-                    "reid_append_mode": True,
-                    "reid_max_embeddings": 3,
-                    "gender_enable": True,
-                    "gender_every_k": 15,
-                    "gender_max_per_frame": 4,
-                    "gender_model_type": "timm_mobile",
-                    "gender_min_confidence": 0.50,
-                    "gender_female_min_confidence": 0.50,
-                    "gender_male_min_confidence": 0.50,
-                    "gender_voting_window": 35,
-                    "gender_adaptive_enabled": True,
-                    "gender_queue_high_watermark": 200,
-                    "gender_queue_low_watermark": 100,
-                    "db_enable": True,
-                    "db_dsn": db_dsn,
-                    "db_batch_size": 200,
-                    "db_flush_interval_ms": 500,
-                    "redis_enable": True,
-                    "redis_url": redis_url,
-                }
-            )
+            preset_update = {
+                "reid_enable": True,
+                "reid_every_k": 20,
+                "reid_ttl_seconds": 60,
+                "reid_similarity_threshold": 0.65,
+                "reid_aggregation_method": "avg_sim",
+                "reid_append_mode": True,
+                "reid_max_embeddings": 3,
+                "gender_enable": True,
+                "gender_every_k": 15,
+                "gender_max_per_frame": 4,
+                "gender_model_type": "timm_mobile",
+                "gender_min_confidence": 0.50,
+                "gender_female_min_confidence": 0.50,
+                "gender_male_min_confidence": 0.50,
+                "gender_voting_window": 35,
+                "gender_adaptive_enabled": True,
+                "gender_queue_high_watermark": 200,
+                "gender_queue_low_watermark": 100,
+                "db_enable": True,
+                "db_dsn": db_dsn,
+                "db_batch_size": 200,
+                "db_flush_interval_ms": 500,
+                "redis_enable": True,
+                "redis_url": redis_url,
+            }
+            # Don't override conf_threshold if explicitly set
+            if "conf_threshold" not in processor_args:
+                preset_update["conf_threshold"] = 0.70  # Higher threshold for preset to reduce false positives
+            processor_args.update(preset_update)
 
         processor = LiveCameraProcessor(**processor_args)
 
