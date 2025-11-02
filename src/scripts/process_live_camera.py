@@ -358,12 +358,24 @@ class LiveCameraProcessor:
                     frame, return_image=self.display
                 )
                 
+                # Store original detections for debugging
+                original_count = len(detections)
+                
                 # Filter false positives: confidence, aspect ratio, size, and area checks
                 filtered_detections = []
+                filtered_reasons = {
+                    "confidence": 0,
+                    "aspect_ratio": 0,
+                    "size": 0,
+                    "area_ratio": 0,
+                    "height_width_ratio": 0,
+                }
+                
                 for d in detections:
                     conf = d.get("confidence", 0.0)
                     # Strict confidence check - must be above threshold
                     if conf < self.conf_threshold:
+                        filtered_reasons["confidence"] += 1
                         continue
                     
                     # Get bbox dimensions
@@ -395,6 +407,7 @@ class LiveCameraProcessor:
                     #    Motorcycles are wider than tall (> 0.70)
                     #    Make threshold stricter
                     if aspect_ratio > 0.65:  # Stricter: was 0.75, now 0.65
+                        filtered_reasons["aspect_ratio"] += 1
                         if frame_num % 50 == 0:  # Log occasionally
                             logger.debug(
                                 "Filtered by aspect ratio: %.3f (w=%.1f, h=%.1f, conf=%.3f)",
@@ -405,6 +418,7 @@ class LiveCameraProcessor:
                     # 2. Minimum size: Person must be reasonably sized
                     #    Increase minimum height requirement
                     if h < 80 or w < 40:  # Stricter: was 50/30, now 80/40
+                        filtered_reasons["size"] += 1
                         if frame_num % 50 == 0:
                             logger.debug(
                                 "Filtered by size: w=%.1f, h=%.1f, conf=%.3f", w, h, conf
@@ -418,6 +432,7 @@ class LiveCameraProcessor:
                     # 4. Area ratio: Person shouldn't take up too little or too much space
                     #    Very small area ratio might indicate false positive
                     if area_ratio < 0.002:  # Less than 0.2% of frame is suspicious
+                        filtered_reasons["area_ratio"] += 1
                         if frame_num % 50 == 0:
                             logger.debug(
                                 "Filtered by area ratio: %.4f (area=%d, conf=%.3f)",
@@ -430,6 +445,7 @@ class LiveCameraProcessor:
                     # 5. Height must be significantly greater than width for person
                     #    Additional check: h should be at least 1.5x w for standing person
                     if h < w * 1.3:  # Person height should be at least 1.3x width
+                        filtered_reasons["height_width_ratio"] += 1
                         if frame_num % 50 == 0:
                             logger.debug(
                                 "Filtered by height/width ratio: h=%.1f, w=%.1f, ratio=%.2f, conf=%.3f",
@@ -441,6 +457,38 @@ class LiveCameraProcessor:
                     filtered_detections.append(d)
                 
                 detections = filtered_detections
+                
+                # Log filtering stats periodically
+                filtered_count = original_count - len(detections)
+                if original_count > 0 and frame_num % 100 == 0:
+                    if filtered_count > 0:
+                        logger.info(
+                            "Filtering: %d/%d detections filtered (conf=%d, aspect=%d, size=%d, area=%d, hw=%d)",
+                            filtered_count, original_count,
+                            filtered_reasons["confidence"],
+                            filtered_reasons["aspect_ratio"],
+                            filtered_reasons["size"],
+                            filtered_reasons["area_ratio"],
+                            filtered_reasons["height_width_ratio"],
+                        )
+                    elif len(detections) > 0:
+                        # Log when detections pass all filters (for debugging false positives)
+                        logger.debug(
+                            "Frame %d: %d detections passed all filters",
+                            frame_num, len(detections)
+                        )
+                        for d in detections:
+                            bbox = d.get("bbox", [])
+                            if len(bbox) >= 4:
+                                if hasattr(bbox, 'tolist'):
+                                    bbox = bbox.tolist()
+                                x1, y1, x2, y2 = float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])
+                                w, h = x2 - x1, y2 - y1
+                                aspect = w / h if h > 0 else 0
+                                logger.debug(
+                                    "  Detection: conf=%.3f, w=%.1f, h=%.1f, aspect=%.3f, h/w=%.2f",
+                                    d.get("confidence", 0), w, h, aspect, h/w if w > 0 else 0
+                                )
                 
                 # Re-create annotated frame if display enabled and we filtered detections
                 if self.display and annotated is None and len(detections) > 0:
@@ -923,6 +971,31 @@ def build_rtsp_url(
 
 def main() -> None:
     """Main entry point."""
+    import fcntl
+    import os
+    
+    # Lock file to prevent multiple instances
+    lock_file = Path("/tmp/kidsplaza_live_camera.lock")
+    try:
+        # Try to acquire exclusive lock (non-blocking)
+        lock_fd = os.open(str(lock_file), os.O_CREAT | os.O_WRONLY | os.O_TRUNC)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # Keep lock file descriptor open
+        import atexit
+        def release_lock():
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                os.close(lock_fd)
+                lock_file.unlink(missing_ok=True)
+            except Exception:
+                pass
+        atexit.register(release_lock)
+        signal.signal(signal.SIGINT, lambda s, f: (release_lock(), sys.exit(0)))
+        signal.signal(signal.SIGTERM, lambda s, f: (release_lock(), sys.exit(0)))
+    except (IOError, OSError):
+        logger.error("Another instance is already running! Exiting.")
+        sys.exit(1)
+    
     parser = argparse.ArgumentParser(
         description="Process live RTSP camera streams with person detection"
     )
