@@ -35,6 +35,7 @@ from src.modules.demographics.keras_tf_gender_classifier import (  # noqa: E402
 )
 from src.modules.demographics.metrics import GenderMetrics  # noqa: E402
 from src.modules.detection.detector import Detector  # noqa: E402
+from src.modules.detection.image_processor import ImageProcessor  # noqa: E402
 from src.modules.reid.cache import ReIDCache  # noqa: E402
 from src.modules.reid.embedder import ReIDEmbedder  # noqa: E402
 from src.modules.reid.arcface_embedder import ArcFaceEmbedder  # noqa: E402
@@ -131,6 +132,9 @@ class LiveCameraProcessor:
 
         # Initialize detector
         self.detector = Detector(model_path=model_path, conf_threshold=conf_threshold)
+        
+        # Initialize image processor for drawing detections
+        self.processor = ImageProcessor()
 
         # Initialize tracker
         self.tracker = Tracker(
@@ -349,14 +353,51 @@ class LiveCameraProcessor:
                 # Process frame (same logic as VideoProcessor)
                 frame_height, frame_width = frame.shape[:2]
 
-                # Run detection with higher confidence threshold to reduce false positives
-                detections, annotated = self.detector.detect(frame, return_image=True)
+                # Run detection - only create annotated frame if display is enabled
+                detections, annotated = self.detector.detect(
+                    frame, return_image=self.display
+                )
                 
-                # Additional filtering: remove detections with very low confidence
-                # This adds a safety layer to filter out false positives like motorcycles
-                detections = [
-                    d for d in detections if d.get("confidence", 0.0) >= self.conf_threshold
-                ]
+                # Filter false positives: confidence, aspect ratio, and size checks
+                filtered_detections = []
+                for d in detections:
+                    conf = d.get("confidence", 0.0)
+                    if conf < self.conf_threshold:
+                        continue
+                    
+                    # Get bbox dimensions
+                    bbox = d.get("bbox", [])
+                    if len(bbox) < 4:
+                        continue
+                    x1, y1, x2, y2 = bbox
+                    w = float(x2 - x1)
+                    h = float(y2 - y1)
+                    
+                    # Filter by aspect ratio: person is usually taller than wide
+                    # Motorcycles are usually wider than tall
+                    if w > 0 and h > 0:
+                        aspect_ratio = w / h
+                        # Person aspect ratio typically 0.3-0.7 (taller than wide)
+                        # Motorcycle aspect ratio typically > 0.8 (wider than tall)
+                        if aspect_ratio > 0.75:  # Too wide, likely not a person
+                            continue
+                        # Filter very small detections (likely false positives)
+                        if h < 50 or w < 30:  # Too small to be a person
+                            continue
+                        # Filter very large detections (likely errors)
+                        if h > frame_height * 0.9 or w > frame_width * 0.9:
+                            continue
+                    
+                    filtered_detections.append(d)
+                
+                detections = filtered_detections
+                
+                # Re-create annotated frame if display enabled and we filtered detections
+                if self.display and annotated is None and len(detections) > 0:
+                    annotated = self.processor.draw_detections(frame, detections)
+                elif self.display and annotated is not None and len(detections) > 0:
+                    # Update annotated frame with filtered detections
+                    annotated = self.processor.draw_detections(frame, detections)
 
                 # Run tracking
                 tracked_detections = self.tracker.update(
@@ -412,27 +453,29 @@ class LiveCameraProcessor:
                     )
 
                 # Display frame if enabled (limit update rate and resize to reduce lag)
-                if self.display and annotated is not None:
+                if self.display:
                     current_time = time.time()
-                    # Only update display at specified FPS
+                    # Only update display at specified FPS to reduce lag
                     if (
                         current_time - self._last_display_time >= 1.0 / self.display_fps
                     ) or self._last_display_time == 0.0:
-                        window_name = f"Live Stream - Channel {self.channel_id}"
-                        # Resize frame for display to reduce lag
-                        display_frame = annotated.copy()
-                        h, w = display_frame.shape[:2]
-                        if w > self.display_max_width:
-                            scale = self.display_max_width / w
-                            new_w = int(w * scale)
-                            new_h = int(h * scale)
-                            display_frame = cv2.resize(
-                                display_frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR
-                            )
-                        cv2.imshow(window_name, display_frame)
+                        if annotated is not None:
+                            window_name = f"Live Stream - Channel {self.channel_id}"
+                            # Resize frame for display to reduce lag (avoid copy if not needed)
+                            h, w = annotated.shape[:2]
+                            if w > self.display_max_width:
+                                scale = self.display_max_width / w
+                                new_w = int(w * scale)
+                                new_h = int(h * scale)
+                                display_frame = cv2.resize(
+                                    annotated, (new_w, new_h), interpolation=cv2.INTER_LINEAR
+                                )
+                            else:
+                                display_frame = annotated  # No resize needed, use original
+                            cv2.imshow(window_name, display_frame)
                         self._last_display_time = current_time
                         self._display_frame_count += 1
-                    # Always check for 'q' key
+                    # Always check for 'q' key (non-blocking)
                     key = cv2.waitKey(1) & 0xFF
                     if key == ord("q"):
                         logger.info("User pressed 'q', stopping processing.")
