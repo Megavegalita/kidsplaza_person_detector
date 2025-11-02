@@ -212,9 +212,16 @@ class LiveCameraProcessor:
             if gender_enable
             else None
         )
-        self.face_detector = (
+        # Face detector for gender classification (if enabled)
+        self.face_detector_gender = (
             FaceDetector(min_detection_confidence=0.5)
             if (gender_enable and gender_enable_face_detection)
+            else None
+        )
+        # Face detector for false positive verification (always enabled if gender is enabled)
+        self.face_detector = (
+            FaceDetector(min_detection_confidence=0.5)
+            if gender_enable  # Enable face verification whenever gender is enabled
             else None
         )
         self.face_gender_classifier = None
@@ -255,6 +262,12 @@ class LiveCameraProcessor:
         self._display_frame_count = 0
         # Resize for display to reduce lag (max width 1280)
         self.display_max_width = 1280
+        
+        # Face verification for false positive filtering
+        # Track face detection status per track_id
+        self._track_face_verification: Dict[int, List[bool]] = {}  # track_id -> [face_detected, ...]
+        self._face_verification_window = 10  # Verify face in last N frames
+        self._face_verification_threshold = 3  # Require at least N face detections in window
 
         # Shutdown flag
         self._shutdown_requested = False
@@ -403,10 +416,10 @@ class LiveCameraProcessor:
                     
                     # STRICT FILTERING RULES:
                     
-                    # 1. Aspect ratio: Person is typically taller than wide (0.25-0.65)
-                    #    Motorcycles are wider than tall (> 0.70)
-                    #    Make threshold stricter
-                    if aspect_ratio > 0.65:  # Stricter: was 0.75, now 0.65
+                    # 1. Aspect ratio: Person is typically taller than wide (0.25-0.55)
+                    #    Motorcycles are wider than tall (> 0.60)
+                    #    Make threshold VERY strict
+                    if aspect_ratio > 0.55:  # VERY strict: was 0.65, now 0.55
                         filtered_reasons["aspect_ratio"] += 1
                         if frame_num % 50 == 0:  # Log occasionally
                             logger.debug(
@@ -444,7 +457,7 @@ class LiveCameraProcessor:
                     
                     # 5. Height must be significantly greater than width for person
                     #    Additional check: h should be at least 1.5x w for standing person
-                    if h < w * 1.3:  # Person height should be at least 1.3x width
+                    if h < w * 1.5:  # STRICT: Person height should be at least 1.5x width (was 1.3x)
                         filtered_reasons["height_width_ratio"] += 1
                         if frame_num % 50 == 0:
                             logger.debug(
@@ -502,6 +515,81 @@ class LiveCameraProcessor:
                     detections, frame=frame, session_id=session_id
                 )
                 detections = tracked_detections
+                
+                # Face verification: Check if tracked detections have faces
+                # This helps eliminate false positives (e.g., motorcycles)
+                # Only check every 3 frames to reduce performance impact
+                if self.face_detector is not None and len(detections) > 0 and frame_num % 3 == 0:
+                    verified_detections = []
+                    for d in detections:
+                        track_id = d.get("track_id")
+                        if track_id is None:
+                            verified_detections.append(d)
+                            continue
+                        
+                        t_id = int(track_id)
+                        
+                        # Get person crop for face detection
+                        bbox = d.get("bbox", [])
+                        if len(bbox) < 4:
+                            verified_detections.append(d)
+                            continue
+                        
+                        if hasattr(bbox, 'tolist'):
+                            bbox = bbox.tolist()
+                        x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
+                        
+                        # Clamp to frame boundaries
+                        x1 = max(0, min(x1, frame_width - 1))
+                        y1 = max(0, min(y1, frame_height - 1))
+                        x2 = max(0, min(x2, frame_width))
+                        y2 = max(0, min(y2, frame_height))
+                        
+                        if x2 > x1 and y2 > y1:
+                            person_crop = frame[y1:y2, x1:x2]
+                            if person_crop.size > 0:
+                                # Try to detect face
+                                face_result = self.face_detector.detect_face(person_crop)
+                                face_detected = face_result is not None
+                            else:
+                                face_detected = False
+                        else:
+                            face_detected = False
+                        
+                        # Update face verification history for this track
+                        if t_id not in self._track_face_verification:
+                            self._track_face_verification[t_id] = []
+                        self._track_face_verification[t_id].append(face_detected)
+                        
+                        # Keep only last N frames of history
+                        if len(self._track_face_verification[t_id]) > self._face_verification_window:
+                            self._track_face_verification[t_id] = self._track_face_verification[t_id][-self._face_verification_window:]
+                        
+                        # Verify: require at least threshold face detections in window
+                        face_history = self._track_face_verification[t_id]
+                        face_count = sum(face_history)
+                        
+                        # For new tracks (< window size), be more lenient
+                        if len(face_history) < self._face_verification_window:
+                            # Require at least 1 face in recent frames
+                            if face_count > 0:
+                                verified_detections.append(d)
+                            # Otherwise, keep if track is very new (< 5 frames)
+                            elif len(face_history) < 5:
+                                verified_detections.append(d)  # Give new tracks a chance
+                        else:
+                            # For established tracks, require minimum face detections
+                            if face_count >= self._face_verification_threshold:
+                                verified_detections.append(d)
+                            else:
+                                # Filter out - likely false positive
+                                if frame_num % 100 == 0:
+                                    logger.debug(
+                                        "Filtered track %d by face verification: %d/%d faces detected",
+                                        t_id, face_count, len(face_history)
+                                    )
+                    
+                    detections = verified_detections
 
                 # Integrate Re-ID
                 if (
@@ -804,7 +892,8 @@ class LiveCameraProcessor:
                     )
 
             if do_detect_face or (crop is None or crop.size == 0):
-                face_result = self.face_detector.detect_face(person_crop)
+                face_result = (self.face_detector_gender.detect_face(person_crop) 
+                              if self.face_detector_gender is not None else None)
                 if face_result is not None:
                     face_bbox_rel, face_conf = face_result
                     self._face_bbox_cache[t_id_int_tmp] = face_bbox_rel
