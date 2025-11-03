@@ -64,7 +64,15 @@ class ReIDEmbedder:
             flat = np.concatenate([flat, pad], axis=0)
         elif flat.shape[0] > self._proj.shape[1]:
             flat = flat[: self._proj.shape[1]]
+        # Check for invalid values before matrix multiplication
+        if np.any(np.isnan(flat)) or np.any(np.isinf(flat)) or np.all(flat == 0):
+            logger.warning("Invalid tensor detected in embed(), returning zero vector")
+            return np.zeros(self._proj.shape[0], dtype=np.float32)
         embedding = self._proj @ flat
+        # Check for invalid results
+        if np.any(np.isnan(embedding)) or np.any(np.isinf(embedding)):
+            logger.warning("Invalid embedding result, returning zero vector")
+            return np.zeros(self._proj.shape[0], dtype=np.float32)
         return embedding.astype(np.float32)
 
     def _l2_normalize(self, vec: np.ndarray, eps: float = 1e-9) -> np.ndarray:
