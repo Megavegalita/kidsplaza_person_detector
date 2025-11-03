@@ -8,38 +8,47 @@ tracking, gender classification, and data storage integration.
 
 import argparse
 import logging
+import queue
 import signal
 import sys
+import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, cast
 
 import cv2  # noqa: E402
 import numpy as np
+import torch  # noqa: E402
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.modules.camera.camera_config import load_camera_config  # noqa: E402
-from src.modules.camera.camera_reader import (CameraReader,  # noqa: E402
-                                              CameraReaderError)
+from src.modules.camera.camera_reader import CameraReader  # noqa: E402
+from src.modules.camera.camera_reader import CameraReaderError
 from src.modules.database.models import PersonDetection  # noqa: E402
 from src.modules.database.postgres_manager import PostgresManager  # noqa: E402
 from src.modules.database.redis_manager import RedisManager  # noqa: E402
+
+# PyTorch-based gender/age classification (no TensorFlow/MediaPipe conflicts)
 from src.modules.demographics.async_worker import AsyncGenderWorker  # noqa: E402
-from src.modules.demographics.face_detector import FaceDetector  # noqa: E402
-from src.modules.demographics.gender_classifier import GenderClassifier  # noqa: E402
-from src.modules.demographics.keras_tf_gender_classifier import (  # noqa: E402
-    KerasTFGenderClassifier,
-)
+from src.modules.demographics.face_gender_classifier import (
+    FaceGenderClassifier,
+)  # noqa: E402
+from src.modules.demographics.gender_opencv import GenderOpenCV  # noqa: E402
 from src.modules.demographics.metrics import GenderMetrics  # noqa: E402
 from src.modules.detection.detector import Detector  # noqa: E402
+from src.modules.detection.face_detector_opencv import FaceDetectorOpenCV
+from src.modules.detection.face_detector_retinaface import (  # noqa: E402
+    RETINAFACE_AVAILABLE,
+    FaceDetectorRetinaFace,
+)
 from src.modules.detection.image_processor import ImageProcessor  # noqa: E402
-from src.modules.detection.face_detector_full import FaceDetectorFull  # noqa: E402
+from src.modules.reid.arcface_embedder import ArcFaceEmbedder  # noqa: E402
 from src.modules.reid.cache import ReIDCache  # noqa: E402
 from src.modules.reid.embedder import ReIDEmbedder  # noqa: E402
-from src.modules.reid.arcface_embedder import ArcFaceEmbedder  # noqa: E402
 from src.modules.reid.integrator import integrate_reid_for_tracks  # noqa: E402
 from src.modules.tracking.tracker import Tracker  # noqa: E402
 
@@ -62,8 +71,8 @@ class LiveCameraProcessor:
         output_dir: str = "output/live",
         run_id: Optional[str] = None,
         conf_threshold: float = 0.5,
-        tracker_max_age: int = 30,
-        tracker_min_hits: int = 3,
+        tracker_max_age: int = 30,  # Reduced from 50 to 30 to remove stale tracks faster
+        tracker_min_hits: int = 2,  # Reduced from 3 to 2 for faster track confirmation
         tracker_iou_threshold: float = 0.3,
         tracker_ema_alpha: float = 0.5,
         reid_enable: bool = False,
@@ -132,23 +141,103 @@ class LiveCameraProcessor:
         self.conf_threshold = conf_threshold
 
         # Initialize face-based detector (replaces YOLOv8 for person detection)
-        # This eliminates false positives like motorcycles since we only detect faces
-        self.face_detector_full = FaceDetectorFull(
-            min_detection_confidence=conf_threshold,
-            model_selection=1,  # Full range (2-5m) for CCTV cameras
-            body_expand_ratio=2.5,  # Expand face bbox by 2.5x for full body
-            body_expand_vertical=0.4,  # Expand downward more
-        )
-        
-        # Keep old detector for compatibility (not used if face detection enabled)
-        self.use_face_detection = True  # Flag to use face detection instead
-        self.detector = None  # YOLOv8 detector (disabled)
-        
+        # Priority: RetinaFace (best accuracy) > YuNet (fallback)
+        # RetinaFace solves false positive issues (motorcycles) and improves accuracy
+
+        # Different thresholds for outdoor vs indoor cameras
+        # Channel 1, 2: Outdoor (ben_ngoai) - people further away, need lower threshold
+        # Channel 3, 4: Indoor (ben_trong) - people closer, can use higher threshold
+        is_outdoor = channel_id in [1, 2]
+
+        if is_outdoor:
+            # Outdoor cameras: lower confidence threshold to detect distant faces
+            # Channel 1 has false positive issue with motorcycles
+            if channel_id == 1:
+                face_confidence_threshold = max(
+                    0.45, conf_threshold * 0.9
+                )  # 0.45 for Channel 1
+                logger.info(
+                    "Outdoor camera (channel %d): Threshold 0.45 (RetinaFace handles false positives well)",
+                    channel_id,
+                )
+            else:
+                face_confidence_threshold = max(
+                    0.35, conf_threshold * 0.7
+                )  # 0.35 for other outdoor cameras
+                logger.info(
+                    "Outdoor camera (channel %d): Lower confidence threshold for distant faces",
+                    channel_id,
+                )
+            input_size = (
+                640,
+                480,
+            )  # Higher resolution for better distant face detection
+            detect_resize = (640, 480)
+        else:
+            # Indoor cameras: higher confidence threshold to reduce false positives
+            face_confidence_threshold = max(
+                0.4, conf_threshold * 0.8
+            )  # 0.4 for indoor (lower than YuNet due to better accuracy)
+            input_size = (480, 360)  # Standard resolution for close faces
+            detect_resize = (480, 360)
+            logger.info(
+                "Indoor camera (channel %d): Threshold 0.4 (RetinaFace has better accuracy)",
+                channel_id,
+            )
+
+        # Try RetinaFace first (best accuracy, low false positives)
+        # Fallback to YuNet if RetinaFace not available
+        if RETINAFACE_AVAILABLE:
+            logger.info(
+                "Using RetinaFace detector (high accuracy, low false positives)"
+            )
+            self.face_detector_full = FaceDetectorRetinaFace(
+                min_detection_confidence=face_confidence_threshold,
+                model_selection="mobile",  # Fast variant (~10ms), use "resnet50" for higher accuracy (~15ms)
+                body_expand_ratio=3.0,
+                body_expand_vertical=0.5,
+                detect_resize=detect_resize,
+            )
+            logger.info(
+                "RetinaFace confidence threshold: %.2f", face_confidence_threshold
+            )
+        else:
+            logger.info(
+                "RetinaFace not available - using YuNet (install with: pip install retinaface)"
+            )
+            self.face_detector_full = FaceDetectorOpenCV(
+                min_detection_confidence=face_confidence_threshold,
+                model_selection=1,  # Full range (2-5m) for CCTV cameras
+                body_expand_ratio=3.0,  # Increased from 2.5 to 3.0 for more accurate full-body bbox
+                body_expand_vertical=0.5,  # Increased from 0.4 to 0.5 for better vertical expansion
+                input_size=input_size,
+                detect_resize=detect_resize,
+            )
+            logger.info("YuNet confidence threshold: %.2f", face_confidence_threshold)
+
+        # Switch back to body detection (YOLOv8) - more reliable than face detection
+        self.use_face_detection = False  # Use YOLOv8 body detection instead
+        self.face_detector_full = None  # Disable face detection
+
+        # Initialize YOLOv8 detector for body/person detection
+        try:
+            self.detector = Detector(
+                model_path=model_path, conf_threshold=conf_threshold
+            )
+            logger.info(
+                "YOLOv8 body detector initialized: model=%s, conf=%.2f",
+                model_path,
+                conf_threshold,
+            )
+        except Exception as e:
+            logger.error("Failed to initialize YOLOv8 detector: %s", e, exc_info=True)
+            self.detector = None
+
         # Initialize image processor for drawing detections
         self.processor = ImageProcessor()
-        
-        logger.info("Using face-based person detection (MediaPipe)")
-        logger.info("Face detection confidence threshold: %.2f", conf_threshold)
+
+        logger.info("Using YOLOv8 body detection for person detection")
+        logger.info("YOLOv8 detection confidence threshold: %.2f", conf_threshold)
 
         # Initialize tracker
         self.tracker = Tracker(
@@ -211,51 +300,80 @@ class LiveCameraProcessor:
         self._db_buffer: List[PersonDetection] = []
         self._last_db_flush_ms: float = time.time() * 1000.0
 
-        # Initialize Gender components (optional)
-        self.gender_enable = gender_enable
+        # Initialize Gender and Age components (PyTorch-based, no TensorFlow conflicts)
+        self.gender_enable = bool(gender_enable)
         self.gender_every_k = gender_every_k
-        self.gender_enable_face_detection = gender_enable_face_detection
-        self.gender_classifier = (
-            GenderClassifier(
-                model_type=gender_model_type,
-                min_confidence=gender_min_confidence,
-                voting_window=gender_voting_window,
-                female_min_confidence=gender_female_min_confidence,
-                male_min_confidence=gender_male_min_confidence,
-            )
-            if gender_enable
-            else None
+        self.gender_enable_face_detection = True  # Use face crops from OpenCV detection
+        # Face detector for gender classification (not needed - using OpenCV face detection)
+        self.face_detector_gender = None  # Not needed
+        self.face_detector = (
+            None  # Not needed - OpenCV DNN already provides face detection
         )
-        # Face detector for gender classification (if enabled)
-        self.face_detector_gender = (
-            FaceDetector(min_detection_confidence=0.5)
-            if (gender_enable and gender_enable_face_detection)
-            else None
-        )
-        # Face detector for false positive verification (ALWAYS ENABLED for verification)
-        # This is critical for eliminating false positives like motorcycles
-        self.face_detector = FaceDetector(min_detection_confidence=0.5)
-        logger.info("Face verification enabled for false positive filtering")
-        self.face_gender_classifier = None
-        if gender_enable and gender_enable_face_detection:
+
+        # Initialize PyTorch-based classifiers
+        if self.gender_enable:
             try:
-                self.face_gender_classifier = KerasTFGenderClassifier(
-                    min_confidence=gender_min_confidence
+                # FaceGenderClassifier uses PyTorch MobileNetV2 (no TensorFlow)
+                self.face_gender_classifier = FaceGenderClassifier(
+                    device="mps" if torch.backends.mps.is_available() else "cpu",
+                    min_confidence=0.65,  # Increased threshold for better accuracy
                 )
-            except ImportError:
-                logger.warning(
-                    "TensorFlow not available; skipping KerasTFGenderClassifier"
+                logger.info("FaceGenderClassifier initialized (PyTorch-based)")
+            except Exception as e:
+                logger.error("Failed to initialize FaceGenderClassifier: %s", e)
+                self.face_gender_classifier = None
+                self.gender_enable = False
+
+            # Initialize gender classifier (OpenCV DNN - pretrained models, recommended)
+            self.gender_opencv = None
+            try:
+                # Try OpenCV DNN first (pretrained on Adience, more accurate ~85-90%)
+                self.gender_opencv = GenderOpenCV(
+                    device="opencl",  # Try OpenCL for GPU acceleration
+                    min_confidence=0.65,  # Higher threshold for better accuracy
                 )
-        self.gender_worker = (
-            AsyncGenderWorker(
-                max_workers=gender_workers,
-                queue_size=gender_queue_size,
-                task_timeout_ms=gender_timeout_ms,
-            )
-            if gender_enable
-            else None
-        )
-        self.gender_metrics = GenderMetrics() if gender_enable else None
+                if self.gender_opencv.gender_net is not None:
+                    logger.info(
+                        "GenderOpenCV initialized (OpenCV DNN pretrained models)"
+                    )
+                    # Use OpenCV model for gender (more accurate than PyTorch fallback)
+                    self.face_gender_classifier = (
+                        None  # Disable PyTorch gender, use OpenCV instead
+                    )
+                else:
+                    logger.warning(
+                        "OpenCV DNN gender model not loaded, using PyTorch fallback"
+                    )
+                    self.gender_opencv = None
+            except Exception as e:
+                logger.warning("Failed to initialize GenderOpenCV: %s", e)
+                self.gender_opencv = None
+
+            # Initialize async worker for gender classification
+            if (
+                self.face_gender_classifier is not None
+                or self.gender_opencv is not None
+            ):
+                self.gender_worker = AsyncGenderWorker(max_workers=2, queue_size=128)
+                self.gender_metrics = GenderMetrics()
+                if self.gender_opencv is not None:
+                    logger.info(
+                        "Gender classification enabled with OpenCV DNN (pretrained models)"
+                    )
+                else:
+                    logger.info(
+                        "Gender classification enabled with PyTorch (MobileNetV2)"
+                    )
+            else:
+                self.gender_worker = None
+                self.gender_metrics = None
+                self.gender_enable = False
+        else:
+            self.face_gender_classifier = None
+            self.gender_opencv = None
+            self.gender_worker = None
+            self.gender_metrics = None
+            logger.info("Gender classification disabled by config")
         self.gender_max_per_frame = gender_max_per_frame
         self._pending_gender_tasks: List[str] = []
         self.gender_face_every_k = max(1, int(gender_face_every_k))
@@ -269,24 +387,105 @@ class LiveCameraProcessor:
         # Display settings
         self.display = bool(display)
         self.display_fps = max(1.0, float(display_fps))  # Minimum 1 FPS
-        self.display_frame_skip = max(1, int(24.0 / self.display_fps))  # Skip frames for display
+        self.display_frame_skip = max(
+            1, int(24.0 / self.display_fps)
+        )  # Skip frames for display
         self._last_display_time = 0.0
         self._display_frame_count = 0
         # Resize for display to reduce lag (max width 1280)
         self.display_max_width = 1280
-        
+
         # Face verification no longer needed - using face-based detection directly
+
+        # Frame skipping for detection (detect every N frames to boost FPS)
+        # Channel 4 needs more frequent detection to catch faces better
+        if channel_id == 4:
+            self.detect_every_n = (
+                2  # Detect every 2 frames for Channel 4 (better coverage)
+            )
+        else:
+            self.detect_every_n = 4  # Detect every 4 frames for others (4x speed boost, tracker handles continuity well)
+        self._last_detect_frame = -1
+        self._cached_detections = []  # Cache detections for skipped frames
+
+        # Multi-threading for parallel processing
+        # OPTIMIZED: Increased workers for better parallelization
+        import os
+
+        num_cores = os.cpu_count() or 4
+        # Use 2 workers for detection (can process multiple frames in parallel)
+        detection_workers = min(2, max(1, num_cores // 2))
+
+        self._frame_queue: queue.Queue[Optional[np.ndarray]] = queue.Queue(maxsize=2)
+        self._detection_queue: queue.Queue[Tuple[int, List[Dict]]] = queue.Queue(
+            maxsize=2
+        )
+        self._detection_executor = ThreadPoolExecutor(
+            max_workers=detection_workers, thread_name_prefix="detection"
+        )
+        self._db_executor = (
+            ThreadPoolExecutor(max_workers=1, thread_name_prefix="db-writer")
+            if db_enable
+            else None
+        )
+        logger.info("Detection executor initialized with %d workers", detection_workers)
+
+        # Threading synchronization
+        self._frame_reader_thread: Optional[threading.Thread] = None
+        self._detection_future: Optional[Future] = None
+        self._pending_frame_num = 0
 
         # Shutdown flag
         self._shutdown_requested = False
+        self._shutdown_lock = threading.Lock()
 
         logger.info("Live camera processor initialized")
-        logger.info("Device: %s", self.detector.model_loader.get_device())
-        logger.info("MPS enabled: %s", self.detector.model_loader.is_mps_enabled())
+        # logger.info("Device: %s", self.detector.model_loader.get_device())  # Disabled - using face detection
+        logger.info("Using OpenCV DNN face detection (no YOLOv8 device needed)")
+        # logger.info("MPS enabled: %s", self.detector.model_loader.is_mps_enabled())  # Disabled
+
+    def _frame_reader_worker(self, camera_reader: CameraReader) -> None:
+        """Worker thread to continuously read frames from camera."""
+        consecutive_failures = 0
+        max_consecutive_failures = 10
+
+        while not self._shutdown_requested:
+            try:
+                frame = camera_reader.read_frame()
+                if frame is None:
+                    consecutive_failures += 1
+                    if consecutive_failures >= max_consecutive_failures:
+                        logger.warning("Max read failures in worker thread")
+                        break
+                    time.sleep(0.01)  # Small delay before retry
+                    continue
+
+                consecutive_failures = 0
+
+                # Put frame in queue (non-blocking, drop if full to prevent lag)
+                try:
+                    self._frame_queue.put_nowait(frame)
+                except queue.Full:
+                    # Drop oldest frame if queue is full (prevent memory buildup)
+                    try:
+                        self._frame_queue.get_nowait()
+                        self._frame_queue.put_nowait(frame)
+                    except queue.Empty:
+                        pass
+
+            except Exception as e:
+                logger.error("Frame reader worker error: %s", e)
+                break
+
+        # Put None to signal end
+        try:
+            self._frame_queue.put_nowait(None)
+        except queue.Full:
+            pass
 
     def process_stream(self, session_id: Optional[str] = None) -> Dict:
         """
-        Process live camera stream.
+        Process live camera stream with parallel processing.
 
         Args:
             session_id: Optional session identifier
@@ -324,6 +523,22 @@ class LiveCameraProcessor:
                         camera_reader._connect()
                         consecutive_failures = 0
                         logger.info("Camera connected successfully")
+
+                        # Start frame reader thread if not already running
+                        if (
+                            self._frame_reader_thread is None
+                            or not self._frame_reader_thread.is_alive()
+                        ):
+                            self._frame_reader_thread = threading.Thread(
+                                target=self._frame_reader_worker,
+                                args=(camera_reader,),
+                                name="frame-reader",
+                                daemon=True,
+                            )
+                            self._frame_reader_thread.start()
+                            logger.info(
+                                "Frame reader thread started for parallel processing"
+                            )
                     except Exception as e:
                         consecutive_failures += 1
                         logger.error(
@@ -338,31 +553,44 @@ class LiveCameraProcessor:
                         time.sleep(self.reconnect_interval)
                         continue
 
-                # Read frame
-                try:
-                    frame = camera_reader.read_frame()
-                    if frame is None:
-                        consecutive_failures += 1
-                        logger.warning(
-                            "Failed to read frame (consecutive failures: %d)",
-                            consecutive_failures,
-                        )
-                        if consecutive_failures >= max_consecutive_failures:
-                            logger.error("Max read failures reached, reconnecting...")
-                            camera_reader.release()
-                            camera_reader = None
+                # Get frame from queue (read by worker thread) or read directly if no worker
+                # Fallback to direct reading if worker thread not started yet
+                if (
+                    self._frame_reader_thread is None
+                    or not self._frame_reader_thread.is_alive()
+                ):
+                    # Fallback: read directly
+                    try:
+                        frame = camera_reader.read_frame()
+                        if frame is None:
+                            consecutive_failures += 1
+                            if consecutive_failures >= max_consecutive_failures:
+                                logger.error(
+                                    "Max read failures reached, reconnecting..."
+                                )
+                                camera_reader.release()
+                                camera_reader = None
+                            continue
+                        consecutive_failures = 0
+                    except CameraReaderError as e:
+                        logger.error("Camera reader error: %s", e)
+                        if camera_reader is not None:
+                            try:
+                                camera_reader.release()
+                            except Exception:
+                                pass
+                        camera_reader = None
                         continue
-
-                    consecutive_failures = 0
-                except CameraReaderError as e:
-                    logger.error("Camera reader error: %s", e)
-                    if camera_reader is not None:
-                        try:
-                            camera_reader.release()
-                        except Exception:
-                            pass
-                    camera_reader = None
-                    continue
+                else:
+                    # Get frame from worker thread queue
+                    try:
+                        frame = self._frame_queue.get(timeout=0.1)
+                        if frame is None:  # Signal to stop
+                            logger.info("Frame reader signaled end")
+                            break
+                    except queue.Empty:
+                        # No frame available yet, check for previous detection result
+                        continue
 
                 frame_num += 1
 
@@ -374,27 +602,93 @@ class LiveCameraProcessor:
                 # Process frame (same logic as VideoProcessor)
                 frame_height, frame_width = frame.shape[:2]
 
-                # Run face-based detection (replaces YOLOv8)
-                # This detects faces first, then estimates full body bbox
+                # PARALLEL PROCESSING: Submit detection task to worker thread
+                # Main thread can continue with other tasks while detection runs
                 detections = []
-                if self.use_face_detection and self.face_detector_full is not None:
-                    detections = self.face_detector_full.detect_persons_from_faces(frame)
-                    # Convert to format expected by rest of pipeline
-                    for d in detections:
-                        # bbox is already in format [x1, y1, x2, y2]
-                        pass  # Already in correct format
-                else:
-                    # Fallback to YOLOv8 (if enabled)
-                    if self.detector is not None:
-                        detections, annotated = self.detector.detect(
-                            frame, return_image=self.display
+                should_detect = frame_num % self.detect_every_n == 0
+
+                if (
+                    should_detect
+                    and not self.use_face_detection
+                    and self.detector is not None
+                ):
+                    # OPTIMIZED: Check previous detection result first (non-blocking)
+                    if self._detection_future is not None:
+                        try:
+                            (
+                                prev_frame_num,
+                                prev_detections,
+                            ) = self._detection_future.result(timeout=0.0)
+                            if prev_detections is not None:
+                                detections = prev_detections
+                                self._last_detect_frame = prev_frame_num
+                                if len(detections) > 0:
+                                    logger.debug(
+                                        "Got detection result from previous frame %d: %d persons",
+                                        prev_frame_num,
+                                        len(detections),
+                                    )
+                        except Exception as e:
+                            # Previous detection not ready - will use empty detections
+                            # Tracker will maintain tracks from previous frames
+                            detections = []
+                            logger.debug("Previous detection not ready yet: %s", e)
+                    else:
+                        detections = []
+
+                    # Submit new detection task (async, non-blocking)
+                    # Pre-resize frame for faster detection (avoid double resize)
+                    # Use larger size for better face detection accuracy
+                    h_orig, w_orig = frame.shape[:2]
+                    target_w, target_h = (
+                        480,
+                        360,
+                    )  # Increased to 480x360 for better face detection
+                    if w_orig > target_w or h_orig > target_h:
+                        small_frame = cv2.resize(
+                            frame, (target_w, target_h), interpolation=cv2.INTER_LINEAR
                         )
-                
+                        scale_w = w_orig / target_w
+                        scale_h = h_orig / target_h
+                    else:
+                        small_frame = frame
+                        scale_w = scale_h = 1.0
+
+                    current_frame_num = frame_num
+                    logger.debug(
+                        "Submitting YOLOv8 detection task: frame=%d, resized=%dx%d, scale=(%.2f, %.2f)",
+                        current_frame_num,
+                        small_frame.shape[1],
+                        small_frame.shape[0],
+                        scale_w,
+                        scale_h,
+                    )
+                    self._detection_future = self._detection_executor.submit(
+                        self._detect_frame_async,
+                        small_frame,
+                        current_frame_num,
+                        scale_w,
+                        scale_h,
+                    )
+                else:
+                    # On skipped frames, check if we have a pending detection result
+                    if self._detection_future is not None:
+                        try:
+                            _, cached_detections = self._detection_future.result(
+                                timeout=0.001
+                            )
+                            if cached_detections:
+                                detections = cached_detections
+                        except Exception:
+                            pass
+                    else:
+                        detections = []
+
                 # Create annotated frame if display enabled
                 annotated = None
                 if self.display and len(detections) > 0:
                     annotated = self.processor.draw_detections(frame, detections)
-                
+
                 # Face-based detection already filters out non-faces
                 # No need for complex geometric filtering - faces are reliable indicators
                 # Only basic validation needed
@@ -404,54 +698,104 @@ class LiveCameraProcessor:
                     bbox = d.get("bbox", [])
                     if len(bbox) < 4:
                         continue
-                    
-                    if hasattr(bbox, 'tolist'):
+
+                    if hasattr(bbox, "tolist"):
                         bbox = bbox.tolist()
-                    
-                    x1, y1, x2, y2 = float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])
+
+                    x1, y1, x2, y2 = (
+                        float(bbox[0]),
+                        float(bbox[1]),
+                        float(bbox[2]),
+                        float(bbox[3]),
+                    )
                     w = x2 - x1
                     h = y2 - y1
-                    
+
                     # Validate dimensions
                     if w <= 0 or h <= 0:
                         continue
-                    
+
                     # Basic size check: filter tiny detections
                     if h < 50 or w < 30:
                         continue
-                    
+
                     # Basic max size check
                     if h > frame_height * 0.9 or w > frame_width * 0.9:
                         continue
-                    
-                    filtered_detections.append(d)
-                
-                detections = filtered_detections
-                
-                # Log stats periodically
-                if len(detections) > 0 and frame_num % 100 == 0:
-                    logger.info(
-                        "Face-based detection: %d persons detected (from faces)",
-                        len(detections)
-                    )
-                
-                # Create annotated frame if display enabled
-                if self.display and len(detections) > 0:
-                    annotated = self.processor.draw_detections(frame, detections)
 
-                # Run tracking
+                    filtered_detections.append(d)
+
+                detections = filtered_detections
+
+                # Log stats periodically - ALWAYS log detection attempts
+                if (
+                    should_detect and frame_num % 10 == 0
+                ):  # Log every 10 detection frames (every 40 frames total)
+                    logger.info(
+                        "YOLOv8 detection attempt: frame=%d, detected=%d persons, should_detect=%s",
+                        frame_num,
+                        len(detections),
+                        should_detect,
+                    )
+                elif len(detections) > 0:  # Always log when we detect someone
+                    logger.info(
+                        "YOLOv8 body detection: %d persons detected at frame %d",
+                        len(detections),
+                        frame_num,
+                    )
+
+                # Run tracking - ALWAYS update tracker to get predicted tracks
+                # Tracker can maintain and predict tracks even without new detections
+                # This ensures bounding boxes display continuously
                 tracked_detections = self.tracker.update(
                     detections, frame=frame, session_id=session_id
                 )
                 detections = tracked_detections
-                
+
+                # Create annotated frame if display enabled - OPTIMIZED
+                # Only annotate when we have detections (either new or recently validated)
+                # Prepare detections for display with gender/age info
+                display_detections = []
+                if self.display and len(detections) > 0:
+                    for d in detections:
+                        display_det = d.copy()
+                        track_id = d.get("track_id")
+                        if track_id is not None:
+                            track_id_int = int(track_id)
+                            # Add gender info if available (only display if confidence is high enough)
+                            gender = track_id_to_gender.get(track_id_int)
+                            gender_conf = track_id_to_gender_conf.get(track_id_int)
+                            if (
+                                gender is not None
+                                and gender != "Unknown"
+                                and gender_conf is not None
+                                and gender_conf >= 0.65
+                            ):
+                                display_det["gender"] = gender
+                                display_det["gender_confidence"] = gender_conf
+                        display_detections.append(display_det)
+
+                annotated = None
+                if self.display:
+                    # Only annotate when we have detections to show
+                    if len(display_detections) > 0:
+                        # Use detections with gender/age info for annotation
+                        annotated = self.processor.draw_detections(
+                            frame, display_detections
+                        )
+                    # Otherwise show original frame (no stale bounding boxes)
+
                 # Face verification no longer needed since we're using face-based detection
                 # All detections already have faces (detected from faces directly)
                 # This eliminates false positives like motorcycles naturally
 
-                # Integrate Re-ID
+                # Integrate Re-ID - ONLY when face detection found persons
+                # This saves significant processing time when no persons are present
                 if (
-                    self.reid_enable
+                    len(detections)
+                    > 0  # CRITICAL: Only run Re-ID if we have detections (faces found)
+                    and should_detect  # Only on detection frames (skip on interpolation frames)
+                    and self.reid_enable
                     and self.reid_embedder is not None
                     and self.reid_cache is not None
                 ):
@@ -464,8 +808,8 @@ class LiveCameraProcessor:
                             session_id=session_id,
                             every_k_frames=self.reid_every_k,
                             frame_index=frame_num,
-                            max_per_frame=5,
-                            min_interval_frames=30,
+                            max_per_frame=3,  # Reduced from 5 for better performance
+                            min_interval_frames=40,  # Increased from 30 to reduce frequency
                             max_embeddings=self.reid_max_embeddings,
                             append_mode=self.reid_append_mode,
                             aggregation_method=self.reid_aggregation_method,
@@ -479,10 +823,13 @@ class LiveCameraProcessor:
                     if t_id is not None:
                         unique_track_ids.add(int(t_id))
 
-                # Gender classification (reuse logic from VideoProcessor)
+                # Gender and Age classification (PyTorch-based, no TensorFlow)
                 if (
                     self.gender_enable
-                    and self.gender_classifier is not None
+                    and (
+                        self.face_gender_classifier is not None
+                        or self.gender_opencv is not None
+                    )
                     and self.gender_worker is not None
                 ):
                     self._process_gender_classification(
@@ -496,43 +843,66 @@ class LiveCameraProcessor:
                         track_id_to_gender_conf,
                     )
 
-                # Display frame if enabled (limit update rate and resize to reduce lag)
+                # Display frame if enabled - OPTIMIZED for minimum overhead
                 if self.display:
                     current_time = time.time()
                     # Only update display at specified FPS to reduce lag
+                    time_since_last_display = current_time - self._last_display_time
+                    display_interval = 1.0 / self.display_fps
+
                     if (
-                        current_time - self._last_display_time >= 1.0 / self.display_fps
-                    ) or self._last_display_time == 0.0:
-                        if annotated is not None:
-                            window_name = f"Live Stream - Channel {self.channel_id}"
-                            # Resize frame for display to reduce lag (avoid copy if not needed)
-                            h, w = annotated.shape[:2]
-                            if w > self.display_max_width:
-                                scale = self.display_max_width / w
-                                new_w = int(w * scale)
-                                new_h = int(h * scale)
-                                display_frame = cv2.resize(
-                                    annotated, (new_w, new_h), interpolation=cv2.INTER_LINEAR
-                                )
-                            else:
-                                display_frame = annotated  # No resize needed, use original
-                            cv2.imshow(window_name, display_frame)
+                        time_since_last_display >= display_interval
+                        or self._last_display_time == 0.0
+                    ):
+                        window_name = f"Live Stream - Channel {self.channel_id}"
+
+                        # Use annotated frame if available, otherwise original frame
+                        frame_to_display = annotated if annotated is not None else frame
+
+                        # Resize frame for display to reduce lag (only if larger than max width)
+                        h, w = frame_to_display.shape[:2]
+                        if w > self.display_max_width:
+                            scale = self.display_max_width / w
+                            new_w = int(w * scale)
+                            new_h = int(h * scale)
+                            # Cache resized frame to avoid repeated resize on same size
+                            display_frame = cv2.resize(
+                                frame_to_display,
+                                (new_w, new_h),
+                                interpolation=cv2.INTER_LINEAR,
+                            )
+                        else:
+                            display_frame = frame_to_display  # No resize needed
+
+                        cv2.imshow(window_name, display_frame)
                         self._last_display_time = current_time
                         self._display_frame_count += 1
-                    # Always check for 'q' key (non-blocking)
+
+                    # Always check for 'q' key (non-blocking, minimal overhead)
                     key = cv2.waitKey(1) & 0xFF
                     if key == ord("q"):
                         logger.info("User pressed 'q', stopping processing.")
                         break
 
-                # Database storage (reuse logic from VideoProcessor)
-                if self.db_enable and self.db_manager is not None:
-                    self._store_detections(
-                        detections,
-                        frame_num,
-                        track_id_to_gender,
-                        track_id_to_gender_conf,
-                    )
+                # Database storage (async write to avoid blocking)
+                if should_detect and self.db_enable and self.db_manager is not None:
+                    if self._db_executor is not None:
+                        # Submit async write (non-blocking)
+                        self._db_executor.submit(
+                            self._store_detections_async,
+                            detections.copy(),
+                            frame_num,
+                            track_id_to_gender.copy(),
+                            track_id_to_gender_conf.copy(),
+                        )
+                    else:
+                        # Fallback to sync write
+                        self._store_detections(
+                            detections,
+                            frame_num,
+                            track_id_to_gender,
+                            track_id_to_gender_conf,
+                        )
 
                 # Log progress periodically
                 if frame_num % 100 == 0:
@@ -590,28 +960,101 @@ class LiveCameraProcessor:
         track_id_to_gender: Dict[int, str],
         track_id_to_gender_conf: Dict[int, float],
     ) -> None:
-        """Process gender classification for detections."""
+        """Process gender classification for detections using face crops from OpenCV."""
         # Poll previously enqueued tasks
         if self.gender_worker is None:
             return
 
+        # Implement voting mechanism: collect multiple predictions per track for stability
+        # Use a window of recent predictions to determine stable gender
         new_pending = []
+        track_predictions_temp: Dict[
+            int, List[Tuple[str, float]]
+        ] = {}  # track_id -> [(gender, gconf), ...]
+
         for task_id in self._pending_gender_tasks:
             res = self.gender_worker.try_get_result(task_id)
             if res is None:
                 new_pending.append(task_id)
                 continue
-            gender_label, gconf, done_ts = res
+            # Format: (gender, conf, done_ts) or (gender, conf)
+            if len(res) >= 3:
+                gender_label, gconf, done_ts = res[:3]
+            elif len(res) >= 2:
+                gender_label, gconf = res[:2]
+            else:
+                continue
             try:
                 _, track_str, _ = task_id.split(":", 2)
                 t_id_int = int(track_str)
-                track_id_to_gender[t_id_int] = gender_label
-                track_id_to_gender_conf[t_id_int] = float(gconf)
-                if self.gender_metrics is not None:
-                    self.gender_metrics.results_total += 1
-                    self.gender_metrics.observe_gender(t_id_int, gender_label)
-            except Exception:
-                pass
+
+                # Collect predictions for voting
+                if t_id_int not in track_predictions_temp:
+                    track_predictions_temp[t_id_int] = []
+                track_predictions_temp[t_id_int].append((gender_label, float(gconf)))
+
+            except Exception as e:
+                logger.warning(
+                    "Failed to parse task_id for voting: %s", e, exc_info=True
+                )
+
+        # Apply voting: use majority vote with confidence weighting for gender
+        for t_id_int, predictions in track_predictions_temp.items():
+            if len(predictions) == 0:
+                continue
+
+            # Filter out "Unknown" for voting (only count if all are Unknown)
+            valid_predictions = [p for p in predictions if p[0] != "Unknown"]
+            if len(valid_predictions) == 0:
+                # All predictions are Unknown - use highest confidence
+                best = max(predictions, key=lambda x: x[1])
+                gender_label, gconf = best
+            else:
+                # Gender: Majority vote with confidence weighting
+                gender_votes: Dict[str, List[float]] = {"M": [], "F": []}
+
+                for pred_gender, pred_gconf in valid_predictions:
+                    if pred_gender in ("M", "F"):
+                        gender_votes[pred_gender].append(pred_gconf)
+
+                # Gender: Weighted by confidence, majority wins
+                m_total = sum(gender_votes.get("M", []))
+                f_total = sum(gender_votes.get("F", []))
+                if m_total > f_total:
+                    gender_label = "M"
+                    gconf = (
+                        m_total / len(valid_predictions)
+                        if len(valid_predictions) > 0
+                        else 0.0
+                    )
+                elif f_total > m_total:
+                    gender_label = "F"
+                    gconf = (
+                        f_total / len(valid_predictions)
+                        if len(valid_predictions) > 0
+                        else 0.0
+                    )
+                else:
+                    # Tie - use highest confidence prediction
+                    best = max(valid_predictions, key=lambda x: x[1])
+                    gender_label, gconf = best[0], best[1]
+
+            # Store final voted results
+            track_id_to_gender[t_id_int] = gender_label
+            track_id_to_gender_conf[t_id_int] = float(gconf)
+
+            logger.info(
+                "Gender result stored (voted from %d predictions): track_id=%d, gender=%s(%.2f)",
+                len(predictions),
+                t_id_int,
+                gender_label,
+                float(gconf),
+            )
+
+            if self.gender_metrics is not None:
+                self.gender_metrics.results_total += 1
+                self.gender_metrics.observe_gender(t_id_int, gender_label)
+
         self._pending_gender_tasks = new_pending
 
         # Adaptive sampling
@@ -660,30 +1103,74 @@ class LiveCameraProcessor:
                 )
 
                 if crop is None or crop.size == 0:
+                    logger.debug(
+                        "Gender/Age: Skipping track_id=%s - crop is None or empty",
+                        d.get("track_id"),
+                    )
                     continue
 
                 t_id_int = int(d["track_id"])
                 task_id = f"{session_id}:{t_id_int}:{frame_num}"
 
+                # Debug logging
+                logger.debug(
+                    "Gender/Age: Enqueuing task for track_id=%d, frame=%d, crop_size=%s, use_face=%s",
+                    t_id_int,
+                    frame_num,
+                    crop.shape if crop is not None else "None",
+                    use_face_classifier,
+                )
+
                 def _make_func(
                     c=crop,
                     track_id_val=t_id_int,
                     use_face=use_face_classifier,
-                    _gc=self.gender_classifier,
                     _fgc=self.face_gender_classifier,
+                    _goc=self.gender_opencv,
                 ):
                     def _run():
                         start_ms = time.time() * 1000.0
-                        if use_face and _fgc is not None:
+
+                        # Use OpenCV DNN model if available (pretrained, more accurate ~85-90%)
+                        if _goc is not None:
+                            try:
+                                gender, gconf = _goc.classify(c)
+                                logger.info(
+                                    "Gender (OpenCV DNN): track_id=%d, gender=%s(%.2f)",
+                                    track_id_val,
+                                    gender,
+                                    gconf,
+                                )
+                                dur = (time.time() * 1000.0) - start_ms
+                                if self.gender_metrics is not None:
+                                    self.gender_metrics.observe_latency(dur)
+                                return gender, float(gconf)
+                            except Exception as e:
+                                logger.warning(
+                                    "OpenCV gender classification error: %s",
+                                    e,
+                                    exc_info=True,
+                                )
+
+                        # Fallback to PyTorch models
+                        if _fgc is not None:
                             gender, gconf = _fgc.classify(c)
+                            logger.info(
+                                "Gender (PyTorch MobileNetV2): track_id=%d, gender=%s(%.2f)",
+                                track_id_val,
+                                gender,
+                                gconf,
+                            )
+                            dur = (time.time() * 1000.0) - start_ms
+                            if self.gender_metrics is not None:
+                                self.gender_metrics.observe_latency(dur)
+                            return gender, float(gconf)
                         else:
-                            if _gc is None:
-                                return "Unknown", 0.0
-                            gender, gconf = _gc.classify(c, track_id=track_id_val)
-                        dur = (time.time() * 1000.0) - start_ms
-                        if self.gender_metrics is not None:
-                            self.gender_metrics.observe_latency(dur)
-                        return gender, float(gconf)
+                            logger.warning(
+                                "Gender classifier not available for track_id=%d",
+                                track_id_val,
+                            )
+                            return "Unknown", 0.0
 
                     return _run
 
@@ -729,43 +1216,63 @@ class LiveCameraProcessor:
         xi1: int,
         xi2: int,
     ) -> Tuple[Optional[np.ndarray], bool]:
-        """Get crop for gender classification (face or upper-body)."""
+        """Get crop for gender/age classification using face_bbox from OpenCV detection."""
         crop = None
         use_face_classifier = False
 
-        if self.gender_enable_face_detection and self.face_detector is not None:
-            t_id_int_tmp = int(detection["track_id"])
-            do_detect_face = frame_num % self.gender_face_every_k == 0
+        # Try to get face_bbox from OpenCV detection (if available)
+        face_bbox = detection.get("face_bbox")
+        if face_bbox is not None and len(face_bbox) >= 4:
+            # face_bbox is [face_x1, face_y1, face_x2, face_y2] in original frame coordinates
+            try:
+                face_x1, face_y1, face_x2, face_y2 = map(float, face_bbox[:4])
+                # Add padding (30% on each side) for better context - improved accuracy
+                face_w = face_x2 - face_x1
+                face_h = face_y2 - face_y1
+                padding_w = int(face_w * 0.3)
+                padding_h = int(face_h * 0.3)
 
-            if not do_detect_face:
-                last_frame = self._face_bbox_cache_frame.get(t_id_int_tmp, -(10**9))
-                if (
-                    (frame_num - last_frame) <= self.gender_cache_ttl_frames
-                    and t_id_int_tmp in self._face_bbox_cache
-                ):
-                    face_bbox_rel = self._face_bbox_cache[t_id_int_tmp]
-                    crop = (self.face_detector_gender.crop_face(person_crop, face_bbox_rel)
-                           if self.face_detector_gender is not None else None)
-                    use_face_classifier = (
-                        True if crop is not None and crop.size > 0 else False
-                    )
+                # Expand bbox with padding
+                face_x1 = max(0, face_x1 - padding_w)
+                face_y1 = max(0, face_y1 - padding_h)
+                face_x2 = min(frame.shape[1], face_x2 + padding_w)
+                face_y2 = min(frame.shape[0], face_y2 + padding_h)
 
-            if do_detect_face or (crop is None or crop.size == 0):
-                face_result = (self.face_detector_gender.detect_face(person_crop) 
-                              if self.face_detector_gender is not None else None)
-                if face_result is not None:
-                    face_bbox_rel, face_conf = face_result
-                    self._face_bbox_cache[t_id_int_tmp] = face_bbox_rel
-                    self._face_bbox_cache_frame[t_id_int_tmp] = frame_num
-                    crop = (self.face_detector_gender.crop_face(person_crop, face_bbox_rel)
-                           if self.face_detector_gender is not None else None)
-                    use_face_classifier = True
+                # Convert to int after padding
+                face_x1, face_y1, face_x2, face_y2 = map(
+                    int, [face_x1, face_y1, face_x2, face_y2]
+                )
 
+                if face_x2 > face_x1 and face_y2 > face_y1:
+                    # Validate minimum size (at least 64x64 for better classification accuracy)
+                    if (face_x2 - face_x1) >= 64 and (face_y2 - face_y1) >= 64:
+                        crop = frame[face_y1:face_y2, face_x1:face_x2].copy()
+                        use_face_classifier = True
+                        logger.debug(
+                            "Extracted face crop: %dx%d from bbox [%.1f,%.1f,%.1f,%.1f]",
+                            face_x2 - face_x1,
+                            face_y2 - face_y1,
+                            face_x1,
+                            face_y1,
+                            face_x2,
+                            face_y2,
+                        )
+                    else:
+                        logger.debug(
+                            "Face crop too small: %dx%d, using upper-body fallback",
+                            face_x2 - face_x1,
+                            face_y2 - face_y1,
+                        )
+            except (ValueError, IndexError) as e:
+                logger.debug("Failed to extract face from detection.face_bbox: %s", e)
+
+        # Fallback: use upper-body crop if face extraction failed
         if crop is None or crop.size == 0:
             h_box = float(yi2) - float(yi1)
             upper_yi2 = yi1 + int(h_box * 0.6)
             crop = frame[yi1:upper_yi2, xi1:xi2].copy()
             use_face_classifier = False
+            logger.debug("Using upper-body crop as fallback")
 
         return crop, use_face_classifier
 
@@ -886,8 +1393,114 @@ class LiveCameraProcessor:
         """Request graceful shutdown."""
         self._shutdown_requested = True
 
+    def _detect_frame_async(
+        self,
+        frame: np.ndarray,
+        frame_num: int,
+        scale_w: float = 1.0,
+        scale_h: float = 1.0,
+    ) -> Tuple[int, List[Dict]]:
+        """Run face detection asynchronously in worker thread.
+
+        Args:
+            frame: Frame (may be pre-resized for performance)
+            frame_num: Frame number
+            scale_w: Scale factor for width (to scale bboxes back)
+            scale_h: Scale factor for height (to scale bboxes back)
+        """
+        try:
+            if not self.use_face_detection and self.detector is not None:
+                # Use YOLOv8 body detection (more reliable than face detection)
+                try:
+                    # Run YOLOv8 detection on resized frame
+                    # Returns: (List[Dict], Optional[np.ndarray])
+                    detections, _ = self.detector.detect(frame, return_image=False)
+
+                    # Detections are already in dict format:
+                    # [{"bbox": [x1, y1, x2, y2], "confidence": float, "class_id": int, "class_name": str}, ...]
+                    # Filter by confidence (already filtered by detector's conf_threshold, but double-check)
+                    detections = [
+                        det
+                        for det in detections
+                        if det.get("confidence", 0.0) >= self.conf_threshold
+                        and det.get("class_id", -1) == 0  # Person class
+                    ]
+
+                    # Scale bboxes back to original frame size
+                    if scale_w != 1.0 or scale_h != 1.0:
+                        for det in detections:
+                            bbox = det.get("bbox", [])
+                            if len(bbox) >= 4:
+                                det["bbox"] = [
+                                    bbox[0] * scale_w,
+                                    bbox[1] * scale_h,
+                                    bbox[2] * scale_w,
+                                    bbox[3] * scale_h,
+                                ]
+
+                    # Log detection result (debugging)
+                    if len(detections) > 0:
+                        logger.debug(
+                            "Async YOLOv8 detection [frame %d]: Found %d persons",
+                            frame_num,
+                            len(detections),
+                        )
+                    else:
+                        logger.debug(
+                            "Async YOLOv8 detection [frame %d]: No persons detected",
+                            frame_num,
+                        )
+
+                    return frame_num, detections
+                except Exception as e:
+                    logger.error("YOLOv8 detection error: %s", e, exc_info=True)
+                    return frame_num, []
+            else:
+                logger.warning(
+                    "YOLOv8 detector not initialized or face detection enabled"
+                )
+                return frame_num, []
+        except Exception as e:
+            logger.error("Async detection error: %s", e, exc_info=True)
+        return frame_num, []
+
+    def _store_detections_async(
+        self,
+        detections: List[Dict],
+        frame_num: int,
+        track_id_to_gender: Dict[int, str],
+        track_id_to_gender_conf: Dict[int, float],
+    ) -> None:
+        """Store detections asynchronously in worker thread."""
+        try:
+            self._store_detections(
+                detections,
+                frame_num,
+                track_id_to_gender,
+                track_id_to_gender_conf,
+            )
+        except Exception as e:
+            logger.error("Async DB write error: %s", e)
+
     def release(self) -> None:
         """Release all resources."""
+        # Signal shutdown
+        with self._shutdown_lock:
+            self._shutdown_requested = True
+
+        # Shutdown executors
+        if self._detection_executor is not None:
+            self._detection_executor.shutdown(wait=True)
+        if self._db_executor is not None:
+            self._db_executor.shutdown(wait=True)
+
+        # Wait for frame reader thread
+        if (
+            self._frame_reader_thread is not None
+            and self._frame_reader_thread.is_alive()
+        ):
+            self._frame_reader_thread.join(timeout=2.0)
+
         if self.gender_worker is not None:
             self.gender_worker.shutdown()
         if self.db_manager is not None:
@@ -924,29 +1537,7 @@ def main() -> None:
     """Main entry point."""
     import fcntl
     import os
-    
-    # Lock file to prevent multiple instances
-    lock_file = Path("/tmp/kidsplaza_live_camera.lock")
-    try:
-        # Try to acquire exclusive lock (non-blocking)
-        lock_fd = os.open(str(lock_file), os.O_CREAT | os.O_WRONLY | os.O_TRUNC)
-        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        # Keep lock file descriptor open
-        import atexit
-        def release_lock():
-            try:
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
-                os.close(lock_fd)
-                lock_file.unlink(missing_ok=True)
-            except Exception:
-                pass
-        atexit.register(release_lock)
-        signal.signal(signal.SIGINT, lambda s, f: (release_lock(), sys.exit(0)))
-        signal.signal(signal.SIGTERM, lambda s, f: (release_lock(), sys.exit(0)))
-    except (IOError, OSError):
-        logger.error("Another instance is already running! Exiting.")
-        sys.exit(1)
-    
+
     parser = argparse.ArgumentParser(
         description="Process live RTSP camera streams with person detection"
     )
@@ -1017,6 +1608,12 @@ def main() -> None:
         default=0.75,
         help="Detection confidence threshold (default: 0.75, increase to reduce false positives)",
     )
+    parser.add_argument(
+        "--gender-enable",
+        action="store_true",
+        default=False,
+        help="Enable gender and age classification (PyTorch-based, no MediaPipe/TensorFlow)",
+    )
 
     args = parser.parse_args()
 
@@ -1056,6 +1653,37 @@ def main() -> None:
             "RTSP URL: %s", rtsp_url.replace(credentials.get("password", ""), "***")
         )
 
+        # Lock file to prevent multiple instances of same channel
+        # Each channel has its own lock file (moved here so we have channel_id)
+        import fcntl
+        import os
+
+        lock_file = Path(f"/tmp/kidsplaza_live_camera_ch{args.channel_id}.lock")
+        try:
+            # Try to acquire exclusive lock (non-blocking)
+            lock_fd = os.open(str(lock_file), os.O_CREAT | os.O_WRONLY | os.O_TRUNC)
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            # Keep lock file descriptor open
+            import atexit
+
+            def release_lock():
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                    os.close(lock_fd)
+                    lock_file.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+            atexit.register(release_lock)
+            signal.signal(signal.SIGINT, lambda s, f: (release_lock(), sys.exit(0)))
+            signal.signal(signal.SIGTERM, lambda s, f: (release_lock(), sys.exit(0)))
+        except (IOError, OSError):
+            logger.error(
+                "Another instance of channel %d is already running! Exiting.",
+                args.channel_id,
+            )
+            sys.exit(1)
+
         # Load database config if available
         db_config_path = Path("config/database.json")
         db_dsn = None
@@ -1078,8 +1706,12 @@ def main() -> None:
             "run_id": args.run_id,
             "max_frames": args.max_frames,
             "display": args.display,
-            "display_fps": getattr(args, "display_fps", 12.0),  # Lower default for smoother display
-            "conf_threshold": getattr(args, "conf_threshold", 0.75),  # Increase to reduce false positives
+            "display_fps": getattr(
+                args, "display_fps", 12.0
+            ),  # Lower default for smoother display
+            "conf_threshold": getattr(
+                args, "conf_threshold", 0.5
+            ),  # Face detection confidence (0.5 = higher quality faces)
         }
 
         # Apply preset if specified
@@ -1087,7 +1719,7 @@ def main() -> None:
             preset_update = {
                 "reid_enable": True,
                 "reid_every_k": 20,
-                "reid_ttl_seconds": 60,
+                "reid_ttl_seconds": 86400,  # 24 hours = 24 * 60 * 60 seconds (for daily person counting)
                 "reid_similarity_threshold": 0.65,
                 "reid_aggregation_method": "avg_sim",
                 "reid_append_mode": True,
@@ -1112,8 +1744,14 @@ def main() -> None:
             }
             # Don't override conf_threshold if explicitly set
             if "conf_threshold" not in processor_args:
-                preset_update["conf_threshold"] = 0.75  # Higher threshold for preset to reduce false positives
+                preset_update[
+                    "conf_threshold"
+                ] = 0.75  # Higher threshold for preset to reduce false positives
             processor_args.update(preset_update)
+
+        # Override gender_enable if explicitly set via command line
+        if hasattr(args, "gender_enable") and args.gender_enable:
+            processor_args["gender_enable"] = True
 
         processor = LiveCameraProcessor(**processor_args)
 

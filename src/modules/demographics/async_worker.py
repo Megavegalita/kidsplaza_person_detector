@@ -28,7 +28,7 @@ class _QueuedTask:
     priority: int
     enqueued_at: float
     task_id: str
-    func: Callable[[], Tuple[str, float]]
+    func: Callable[[], Tuple[str, float]]  # gender, confidence only (age disabled)
 
 
 class AsyncGenderWorker:
@@ -41,7 +41,7 @@ class AsyncGenderWorker:
         task_timeout_ms: int = 50,
     ) -> None:
         self._queue: PriorityQueue[_QueuedTask] = PriorityQueue(maxsize=queue_size)
-        self._results: Dict[str, Tuple[str, float, float]] = {}
+        self._results: Dict[str, Tuple[str, float, float]] = {}  # gender, conf, timestamp (age disabled)
         self._results_lock = threading.Lock()
         self._shutdown = threading.Event()
         self._workers = [
@@ -63,14 +63,14 @@ class AsyncGenderWorker:
         )
 
     def enqueue(
-        self, task_id: str, priority: int, func: Callable[[], Tuple[str, float]]
+        self, task_id: str, priority: int, func: Callable[[], Tuple[str, float, int, float]]
     ) -> bool:
         """Enqueue a classification task.
 
         Args:
             task_id: Unique identifier (e.g., f"{session}:{track_id}:{frame}")
             priority: Lower value processes sooner (0 is highest)
-            func: Callable returning (gender_label, confidence)
+            func: Callable returning (gender_label, confidence) - age disabled
 
         Returns:
             True if enqueued, False if queue is full.
@@ -92,7 +92,7 @@ class AsyncGenderWorker:
     def try_get_result(self, task_id: str) -> Optional[Tuple[str, float, float]]:
         """Get result if available.
 
-        Returns (gender, confidence, completed_at) or None.
+        Returns (gender, confidence, completed_at) or None. Age disabled.
         """
         with self._results_lock:
             return self._results.get(task_id)
@@ -113,7 +113,7 @@ class AsyncGenderWorker:
             try:
                 start = time.time()
                 # Soft timeout: if task exceeds budget, we still let it finish
-                gender, conf = queued.func()
+                gender, conf = queued.func()  # Age disabled - only gender
                 done = time.time()
                 if (done - start) * 1000.0 > self._task_timeout_ms:
                     logger.debug(

@@ -4,6 +4,8 @@ Full-frame face detection module using MediaPipe.
 
 Primary detector for person detection - detects faces directly from full frame,
 then expands to estimate full body bounding box.
+
+Reuses FaceDetector from demographics module to avoid dependency conflicts.
 """
 
 import logging
@@ -12,11 +14,18 @@ from typing import Any, Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
+# Reuse existing FaceDetector which handles MediaPipe imports properly
+# Import will be done at module level in process_live_camera.py
+# This module expects to be imported after sys.path is set up
 try:
-    import mediapipe as mp
-
-    MEDIAPIPE_AVAILABLE = True
+    # Try importing - will work if sys.path is already set
+    from src.modules.demographics.face_detector import (
+        FaceDetector,
+        MEDIAPIPE_AVAILABLE,
+    )
 except ImportError:
+    # If direct import fails, will try lazy import
+    FaceDetector = None  # type: ignore
     MEDIAPIPE_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
@@ -48,20 +57,53 @@ class FaceDetectorFull:
             body_expand_ratio: Ratio to expand face bbox for full body estimate
             body_expand_vertical: Additional vertical expansion ratio
         """
-        if not MEDIAPIPE_AVAILABLE:
-            raise ImportError("mediapipe is required for face detection")
-
         self.min_detection_confidence = min_detection_confidence
         self.min_tracking_confidence = min_tracking_confidence
         self.model_selection = model_selection
         self.body_expand_ratio = body_expand_ratio
         self.body_expand_vertical = body_expand_vertical
 
-        # Initialize MediaPipe Face Detection for full frame
-        self.face_detection = mp.solutions.face_detection.FaceDetection(
-            model_selection=model_selection,
+        # Try to import FaceDetector if not already imported
+        _FaceDetectorClass = FaceDetector
+        _MPAvailable = MEDIAPIPE_AVAILABLE
+        
+        if _FaceDetectorClass is None:
+            try:
+                import sys
+                from pathlib import Path
+                src_path = Path(__file__).parent.parent.parent
+                if str(src_path) not in sys.path:
+                    sys.path.insert(0, str(src_path))
+                from src.modules.demographics.face_detector import (
+                    FaceDetector as _FD,
+                    MEDIAPIPE_AVAILABLE as _MP,
+                )
+                _FaceDetectorClass = _FD
+                _MPAvailable = _MP
+            except ImportError as e:
+                logger.error("Failed to import FaceDetector: %s", e)
+                raise ImportError("mediapipe is required for face detection") from e
+        
+        if not _MPAvailable:
+            logger.error("mediapipe is required for face detection but not available")
+            raise ImportError("mediapipe is required for face detection")
+
+        # Create base FaceDetector instance (reuses existing implementation)
+        # This handles MediaPipe imports properly and avoids conflicts
+        self._base_detector = _FaceDetectorClass(
             min_detection_confidence=min_detection_confidence,
+            model_selection=model_selection,
         )
+        
+        # Check if face_detection was initialized
+        if self._base_detector.face_detection is None:
+            raise ImportError(
+                "Failed to initialize MediaPipe FaceDetection. "
+                "MediaPipe may not be properly installed."
+            )
+        
+        # Access the underlying MediaPipe face_detection instance
+        self.face_detection = self._base_detector.face_detection
 
         logger.info(
             "FaceDetectorFull initialized: confidence=%.2f, model=%d, expand_ratio=%.2f",
@@ -170,9 +212,10 @@ class FaceDetectorFull:
 
     def release(self) -> None:
         """Release resources."""
-        if self.face_detection is not None:
-            self.face_detection.close()
-            self.face_detection = None
+        if self._base_detector is not None:
+            self._base_detector.release()
+        self.face_detection = None
+        self._base_detector = None
         logger.info("Face detector resources released")
 
 

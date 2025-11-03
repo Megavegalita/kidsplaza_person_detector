@@ -94,11 +94,22 @@ class FaceGenderClassifier:
             Tuple of (gender, confidence) - ('M' or 'F', confidence score)
         """
         try:
+            # Validate face crop quality - skip if too small or invalid
+            if face_crop is None or face_crop.size == 0:
+                logger.debug("Face crop is None or empty")
+                return "Unknown", 0.0
+            
+            h, w = face_crop.shape[:2]
+            if h < 48 or w < 48:  # Minimum size for reasonable classification
+                logger.debug("Face crop too small: %dx%d, skipping classification", w, h)
+                return "Unknown", 0.0
+            
             # Convert BGR to RGB
             face_rgb = cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
 
-            # Resize to 224x224 (MobileNetV2 input size)
-            face_resized = cv2.resize(face_rgb, (224, 224))
+            # Resize to 224x224 (MobileNetV2 input size) - use better interpolation for small crops
+            interpolation = cv2.INTER_LINEAR if min(h, w) >= 64 else cv2.INTER_CUBIC
+            face_resized = cv2.resize(face_rgb, (224, 224), interpolation=interpolation)
 
             # Normalize to [0, 1] and transform to tensor
             face_tensor = torch.from_numpy(face_resized).float() / 255.0

@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Dict, List
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -59,9 +60,12 @@ def integrate_reid_for_tracks(
             ImageProcessor  # noqa: E402
 
         processor = ImageProcessor()
-        embeds_done = 0
+        
+        # OPTIMIZED: Filter and prepare detections for parallel processing
+        candidates: List[Tuple[Dict, int]] = []  # (detection, track_id)
+        
         for det in detections_with_tracks:
-            if embeds_done >= max_per_frame:
+            if len(candidates) >= max_per_frame:
                 break
             track_id = det.get("track_id")
             if track_id is None:
@@ -86,40 +90,72 @@ def integrate_reid_for_tracks(
             bbox = det.get("bbox")
             if bbox is None:
                 continue
-            x1, y1, x2, y2 = map(int, bbox)
-            crop = processor.crop_person(
-                frame, np.array([x1, y1, x2, y2], dtype=np.int32)
-            )
-            if crop is None:
-                continue
-            emb = embedder.embed(crop)
-            # Multi-embedding support: append up to max_embeddings if requested
-            embeddings_list = None
-            if append_mode and max_embeddings > 1:
-                prev = cache.get(session_id, int(track_id))
-                existing = []
-                if prev is not None and prev.embeddings:
-                    existing = prev.embeddings
-                elif (
-                    prev is not None
-                    and prev.embedding is not None
-                    and prev.embedding.size > 0
-                ):
-                    existing = [prev.embedding.tolist()]
-                existing.append(emb.tolist())
-                # keep only most recent max_embeddings
-                embeddings_list = existing[-int(max_embeddings) :]
-
-            cache.set(
-                session_id,
-                ReIDCacheItem(
-                    track_id=int(track_id),
-                    embedding=emb,
-                    updated_at=time.time(),
-                    embeddings=embeddings_list,
-                    aggregation_method=aggregation_method,
-                ),
-            )
-            embeds_done += 1
+            
+            candidates.append((det, int(track_id)))
+        
+        if len(candidates) == 0:
+            return
+        
+        # OPTIMIZED: Parallelize embedding computation
+        def _compute_embedding(det_info: Tuple[Dict, int]) -> Tuple[int, np.ndarray, Optional[List[List[float]]]]:
+            """Compute embedding for a single detection in parallel."""
+            det, track_id = det_info
+            try:
+                bbox = det.get("bbox")
+                x1, y1, x2, y2 = map(int, bbox)
+                crop = processor.crop_person(
+                    frame, np.array([x1, y1, x2, y2], dtype=np.int32)
+                )
+                if crop is None:
+                    return track_id, None, None
+                
+                emb = embedder.embed(crop)
+                
+                # Multi-embedding support
+                embeddings_list = None
+                if append_mode and max_embeddings > 1:
+                    prev = cache.get(session_id, track_id)
+                    existing = []
+                    if prev is not None and prev.embeddings:
+                        existing = prev.embeddings
+                    elif (
+                        prev is not None
+                        and prev.embedding is not None
+                        and prev.embedding.size > 0
+                    ):
+                        existing = [prev.embedding.tolist()]
+                    existing.append(emb.tolist())
+                    embeddings_list = existing[-int(max_embeddings):]
+                
+                return track_id, emb, embeddings_list
+            except Exception as e:
+                logger.debug("Embedding computation error for track %d: %s", track_id, e)
+                return track_id, None, None
+        
+        # Use ThreadPoolExecutor for parallel embedding (2 workers for Re-ID)
+        embeds_done = 0
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="reid-embed") as executor:
+            futures = {executor.submit(_compute_embedding, cand): cand for cand in candidates}
+            
+            for future in as_completed(futures):
+                if embeds_done >= max_per_frame:
+                    break
+                
+                try:
+                    track_id, emb, embeddings_list = future.result(timeout=1.0)
+                    if emb is not None:
+                        cache.set(
+                            session_id,
+                            ReIDCacheItem(
+                                track_id=track_id,
+                                embedding=emb,
+                                updated_at=time.time(),
+                                embeddings=embeddings_list,
+                                aggregation_method=aggregation_method,
+                            ),
+                        )
+                        embeds_done += 1
+                except Exception as e:
+                    logger.debug("Re-ID embedding result error: %s", e)
     except Exception as e:
         logger.warning("Re-ID integration skipped due to error: %s", e)

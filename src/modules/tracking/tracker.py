@@ -40,11 +40,14 @@ class Track:
 
     def update(self, bbox: np.ndarray, confidence: float, ema_alpha: float) -> None:
         """Update track with new detection using EMA smoothing on bbox."""
+        # Use tighter EMA for more accurate tracking (less smoothing)
+        # Reduced smoothing to keep bbox closer to actual detection
+        smoothing_alpha = min(ema_alpha, 0.7)  # Cap at 0.7 for more responsive tracking
         if self._last_bbox is None:
             # Use current bbox as previous for first smoothing step
-            self.bbox = self._ema_smooth(self.bbox, bbox, ema_alpha)
+            self.bbox = self._ema_smooth(self.bbox, bbox, smoothing_alpha)
         else:
-            self.bbox = self._ema_smooth(self._last_bbox, bbox, ema_alpha)
+            self.bbox = self._ema_smooth(self._last_bbox, bbox, smoothing_alpha)
         self._last_bbox = self.bbox.copy()
         self.confidence = confidence
         self.hits += 1
@@ -183,9 +186,11 @@ class Tracker:
         for track in self.tracks:
             track.predict()
 
-        # If no detections, just return confirmed tracks
+        # If no detections, return only recently updated tracks (time_since_update <= 10)
+        # This prevents showing stale tracks from false positives
+        # 10 frames = ~0.4 seconds at 24 FPS - reasonable for continuous display
         if len(detections) == 0:
-            return self._get_confirmed_tracks()
+            return self._get_confirmed_tracks(max_time_since_update=10)
 
         # If no tracks yet, create new tracks
         if len(self.tracks) == 0:
@@ -221,9 +226,9 @@ class Tracker:
             bbox = self._convert_detection(detections[d_idx])
             track.update(bbox, detections[d_idx]["confidence"], self.ema_alpha)
 
-        # Fallback: if greedy IoU matching produced no match but there is a clear best track,
-        # attach the detection to the best IoU track (even if below threshold) to avoid
-        # proliferating new tracks on sudden jumps.
+        # Fallback: if greedy IoU matching produced no match, try to match with lower threshold
+        # BUT: Only match if IoU is reasonable (> 0.15) to avoid creating duplicate tracks
+        # This helps with sudden jumps while preventing false matches
         if len(unmatched_detections) > 0 and len(self.tracks) > 0:
             for d_idx in list(unmatched_detections):
                 best_iou = -1.0
@@ -236,12 +241,18 @@ class Tracker:
                     if iou_val > best_iou:
                         best_iou = iou_val
                         best_t_idx_fb = t_idx
-                if best_t_idx_fb is not None:
+                # FIXED: Only match if IoU >= 0.15 (reasonable overlap)
+                # This prevents matching detections that are too far apart, avoiding duplicate tracks
+                if best_t_idx_fb is not None and best_iou >= 0.15:
                     track = self.tracks[best_t_idx_fb]
                     track.update(det_bbox_fb, detections[d_idx]["confidence"], self.ema_alpha)
                     matched_tracks.add(best_t_idx_fb)
                     matched_indices.append((d_idx, best_t_idx_fb))
                     unmatched_detections.discard(d_idx)
+                    logger.debug(
+                        "Fallback match: detection %d → track %d (IoU=%.2f)",
+                        d_idx, self.tracks[best_t_idx_fb].track_id, best_iou
+                    )
 
         # Handle remaining unmatched detections (try Re-ID match; else create new track)
         for d_idx in list(unmatched_detections):
@@ -418,12 +429,20 @@ class Tracker:
 
         return matches
 
-    def _get_confirmed_tracks(self) -> List[Dict]:
-        """Get confirmed tracks (hits >= min_hits)."""
+    def _get_confirmed_tracks(self, max_time_since_update: Optional[int] = None) -> List[Dict]:
+        """
+        Get confirmed tracks (hits >= min_hits).
+        
+        Args:
+            max_time_since_update: Optional limit on time_since_update (for filtering stale tracks)
+        """
         confirmed_tracks = []
 
         for track in self.tracks:
             if track.hits >= self.min_hits:
+                # Filter by time_since_update if specified (only show recently updated tracks)
+                if max_time_since_update is not None and track.time_since_update > max_time_since_update:
+                    continue
                 confirmed_tracks.append(
                     {
                         "track_id": track.track_id,
