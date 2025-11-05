@@ -199,3 +199,87 @@ class PostgresManager:
         p50 = data[int(0.5 * (n - 1))]
         p95 = data[int(0.95 * (n - 1))]
         return {"insert_p50_ms": round(p50, 1), "insert_p95_ms": round(p95, 1), "samples": n}
+
+    # --- Custom lightweight helpers for counter pipeline ---
+    def insert_counter_event(
+        self,
+        *,
+        channel_id: int,
+        zone_id: str,
+        zone_name: str,
+        event_type: str,
+        track_id: int | None,
+        person_id: str | None,
+        frame_number: int | None,
+        extra_json: dict | None = None,
+    ) -> None:
+        """Insert single counter event row."""
+        if self._pool is None:
+            return
+        try:
+            with self._conn() as conn:
+                with conn.cursor() as cur:
+                    sql = (
+                        "INSERT INTO counter_events (occurred_at, channel_id, zone_id, zone_name, "
+                        "event_type, track_id, person_id, frame_number, extra_json) "
+                        "VALUES (NOW(), %s, %s, %s, %s, %s, %s, %s, %s)"
+                    )
+                    cur.execute(
+                        sql,
+                        (
+                            int(channel_id),
+                            str(zone_id),
+                            str(zone_name or ""),
+                            str(event_type),
+                            int(track_id) if track_id is not None else None,
+                            str(person_id) if person_id is not None else None,
+                            int(frame_number) if frame_number is not None else None,
+                            json.dumps(extra_json or {}),
+                        ),
+                    )
+                conn.commit()
+        except Exception as e:
+            logger.warning("insert_counter_event failed: %s", e)
+
+    def upsert_channel_metadata(
+        self,
+        *,
+        channel_id: int,
+        name: str,
+        rtsp_url: str,
+        location: str | None,
+        description: str | None,
+        features_json: dict | None,
+        company_id: str | None = None,
+        store_id: str | None = None,
+    ) -> None:
+        """Upsert channel into channels table."""
+        if self._pool is None:
+            return
+        try:
+            with self._conn() as conn:
+                with conn.cursor() as cur:
+                    sql = (
+                        "INSERT INTO channels (channel_id,name,rtsp_url,location,description,features_json,"
+                        "company_id,store_id,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,NOW()) "
+                        "ON CONFLICT (channel_id) DO UPDATE SET name=EXCLUDED.name, rtsp_url=EXCLUDED.rtsp_url,"
+                        " location=EXCLUDED.location, description=EXCLUDED.description,"
+                        " features_json=EXCLUDED.features_json, company_id=EXCLUDED.company_id,"
+                        " store_id=EXCLUDED.store_id, updated_at=NOW()"
+                    )
+                    cur.execute(
+                        sql,
+                        (
+                            int(channel_id),
+                            name,
+                            rtsp_url,
+                            location,
+                            description,
+                            json.dumps(features_json or {}),
+                            company_id,
+                            store_id,
+                        ),
+                    )
+                conn.commit()
+        except Exception as e:
+            logger.warning("upsert_channel_metadata failed: %s", e)

@@ -133,9 +133,12 @@ class ImageProcessor:
             cv2.rectangle(annotated, (x1, y1), (x2, y2), color, thickness)
 
             if show_labels:
-                # Build label with track_id if available
+                # Build label preferring person_id (Re-ID) when available, else track_id
                 label = f"{detection.get('class_name', 'person')}: {conf:.2f}"
-                if "track_id" in detection:
+                person_id = detection.get("person_id") or detection.get("_person_id")
+                if person_id:
+                    label = f"PID:{person_id} - {label}"
+                elif "track_id" in detection:
                     label = f"ID{detection['track_id']} - {label}"
                 # Append gender if available (use full name instead of M/F)
                 gender = detection.get("gender")

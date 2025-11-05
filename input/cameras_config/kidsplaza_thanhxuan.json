@@ -15,33 +15,274 @@
       "name": "channel_1",
       "rtsp_url": "rtsp://user1:cam12345@14.177.236.96:554/cam/realmonitor?channel=1&subtype=0",
       "description": "Kidsplaza Thanh Xuan - Camera Channel 1",
-      "localtion":"ben_ngoai_cam_phai"
+      "localtion":"ben_ngoai_cam_phai",
+      "features": {
+        "body_detection": {
+          "conf_threshold": 0.45,
+          "detect_every_n": 2
+        },
+        "tracking": {
+          "max_age": 60,
+          "min_hits": 2,
+          "iou_threshold": 0.4,
+          "ema_alpha": 0.7
+        },
+        "gender_classification": {
+          "enabled": false
+        },
+        "reid": {
+          "enabled": true,
+          "every_k_frames": 1,
+          "ttl_seconds": 180,
+          "similarity_threshold": 0.65,
+          "aggregation_method": "avg_sim",
+          "append_mode": true,
+          "max_embeddings": 5
+        },
+        "counter": {
+          "enabled": true,
+          "zones": [
+            {
+              "zone_id": "zone_1",
+              "name": "Left Half",
+              "type": "polygon",
+              "coordinate_type": "percentage",
+              "points": [[0, 0], [50, 0], [50, 100], [0, 100]],
+              "enter_threshold": 3,
+              "exit_threshold": 3,
+              "points_labels": [
+                "Point 0: Top-left corner (0%, 0%)",
+                "Point 1: Top-right corner (50% width, 0% height)",
+                "Point 2: Bottom-right corner (50% width, 100% height)",
+                "Point 3: Bottom-left corner (0% width, 100% height)"
+              ],
+              "direction": "bidirectional",
+              "comment": "Left half of screen using percentage (dynamic for any resolution). Points are numbered 0-3 on display."
+            }
+          ]
+        }
+      }
     },
     {
       "channel_id": 2,
       "name": "channel_2",
       "rtsp_url": "rtsp://user1:cam12345@14.177.236.96:554/cam/realmonitor?channel=2&subtype=0",
       "description": "Kidsplaza Thanh Xuan - Camera Channel 2",
-      "localtion":"ben_ngoai_cam_giua"
+      "localtion":"ben_ngoai_cam_giua",
+      "features": {
+        "body_detection": {
+          "conf_threshold": 0.45,
+          "detect_every_n": 2
+        },
+        "tracking": {
+          "max_age": 60,
+          "min_hits": 2,
+          "iou_threshold": 0.4,
+          "ema_alpha": 0.7
+        },
+        "gender_classification": {
+          "enabled": false
+        },
+        "reid": {
+          "enabled": true,
+          "every_k_frames": 1,
+          "ttl_seconds": 180,
+          "similarity_threshold": 0.65,
+          "aggregation_method": "avg_sim",
+          "append_mode": true,
+          "max_embeddings": 5
+        },
+        "counter": {
+          "enabled": true,
+          "zones": [
+            {
+              "zone_id": "zone_1",
+              "name": "Right Half",
+              "type": "polygon",
+              "coordinate_type": "percentage",
+              "points": [[50, 0], [100, 0], [100, 100], [50, 100]],
+              "enter_threshold": 3,
+              "exit_threshold": 3,
+              "points_labels": [
+                "Point 0: Top-left corner (0%, 0%)",
+                "Point 1: Top-right corner (50% width, 0% height)",
+                "Point 2: Bottom-right corner (50% width, 100% height)",
+                "Point 3: Bottom-left corner (0% width, 100% height)"
+              ],
+              "direction": "bidirectional",
+              "comment": "Left half of screen using percentage (dynamic for any resolution). Points are numbered 0-3 on display."
+            }
+          ]
+        }
+      }
     },
     {
       "channel_id": 3,
       "name": "channel_3",
       "rtsp_url": "rtsp://user1:cam12345@14.177.236.96:554/cam/realmonitor?channel=3&subtype=0",
       "description": "Kidsplaza Thanh Xuan - Camera Channel 3",
-      "localtion":"ben_trong_thu_ngan"
+      "localtion":"ben_trong_thu_ngan",
+      "features": {
+        "body_detection": {
+          "conf_threshold": 0.5,
+          "detect_every_n": 4
+        },
+        "tracking": {
+          "max_age": 30,
+          "min_hits": 2,
+          "iou_threshold": 0.3,
+          "ema_alpha": 0.5
+        },
+      "gender_classification": {
+        "enabled": true,
+        "every_k_frames": 15,
+        "model_type": "timm_mobile",
+        "min_confidence": 0.5,
+        "female_min_confidence": 0.5,
+        "male_min_confidence": 0.5,
+        "voting_window": 35
+      },
+        "reid": {
+          "enabled": true,
+          "every_k_frames": 1,
+          "ttl_seconds": 180,
+          "similarity_threshold": 0.70,
+          "aggregation_method": "avg_sim",
+          "append_mode": true,
+          "max_embeddings": 5
+        },
+        "counter": {
+          "enabled": true,
+          "zones": [
+            {
+              "zone_id": "zone_1",
+              "name": "Bottom Half",
+              "type": "polygon",
+              "coordinate_type": "percentage",
+              "points": [[0, 50], [100, 50], [100, 100], [0, 100]],
+              "enter_threshold": 3,
+              "exit_threshold": 3,
+              "points_labels": [
+                "Point 0: Top-left corner (0% width, 50% height)",
+                "Point 1: Top-right corner (100% width, 50% height)",
+                "Point 2: Bottom-right corner (100% width, 100% height)",
+                "Point 3: Bottom-left corner (0% width, 100% height)"
+              ],
+              "direction": "bidirectional",
+              "comment": "Bottom half of screen using percentage (dynamic for any resolution). Points are numbered 0-3 on display."
+            }
+          ]
+        }
+      }
     },
     {
       "channel_id": 4,
       "name": "channel_4",
       "rtsp_url": "rtsp://user1:cam12345@14.177.236.96:554/cam/realmonitor?channel=4&subtype=0",
       "description": "Kidsplaza Thanh Xuan - Camera Channel 4",
-      "localtion":"ben_trong_cua_vao"
+      "localtion":"ben_trong_cua_vao",
+      "features": {
+        "body_detection": {
+          "conf_threshold": 0.5,
+          "detect_every_n": 1
+        },
+        "tracking": {
+          "max_age": 90,
+          "min_hits": 3,
+          "iou_threshold": 0.45,
+          "ema_alpha": 0.75
+        },
+        "gender_classification": {
+          "enabled": true,
+          "every_k_frames": 15,
+          "model_type": "timm_mobile",
+          "min_confidence": 0.5,
+          "female_min_confidence": 0.5,
+          "male_min_confidence": 0.5,
+          "voting_window": 35
+        },
+        "reid": {
+          "enabled": true,
+          "every_k_frames": 1,
+          "ttl_seconds": 180,
+          "similarity_threshold": 0.65,
+          "aggregation_method": "avg_sim",
+          "append_mode": true,
+          "max_embeddings": 5
+        },
+        "counter": {
+          "enabled": true,
+          "zones": [
+            {
+              "zone_id": "zone_1",
+              "name": "Active Zone",
+              "type": "polygon",
+              "coordinate_type": "percentage",
+              "points": [[0, 30], [50, 30], [50, 100], [0, 100]],
+              "enter_threshold": 2,
+              "exit_threshold": 2,
+              "points_labels": [
+                "Point 0: Top-left corner (0% width, 50% height)",
+                "Point 1: Top-right corner (100% width, 50% height)",
+                "Point 2: Bottom-right corner (100% width, 100% height)",
+                "Point 3: Bottom-left corner (0% width, 100% height)"
+              ],
+              "direction": "bidirectional",
+              "comment": "Bottom half of screen using percentage (dynamic for any resolution). Points are numbered 0-3 on display."
+            }
+          ]
+        }
+      }
     }
   ],
+  "default_features": {
+    "body_detection": {
+      "enabled": true,
+      "always": true,
+      "comment": "Always enabled, cannot be disabled",
+      "conf_threshold": 0.5,
+      "detect_every_n": 4,
+      "detect_resize": [480, 360],
+      "model_path": "yolov8n.pt"
+    },
+    "tracking": {
+      "enabled": true,
+      "always": true,
+      "comment": "ByteTrack always enabled",
+      "max_age": 30,
+      "min_hits": 2,
+      "iou_threshold": 0.3,
+      "ema_alpha": 0.5
+    },
+    "reid": {
+      "enabled": true,
+      "always": false,
+      "every_k_frames": 20,
+      "ttl_seconds": 60,
+      "similarity_threshold": 0.65,
+      "aggregation_method": "avg_sim",
+      "append_mode": true,
+      "max_embeddings": 3
+    },
+    "gender_classification": {
+      "enabled": false,
+      "always": false,
+      "every_k_frames": 20,
+      "model_type": "timm_mobile",
+      "min_confidence": 0.5,
+      "female_min_confidence": 0.5,
+      "male_min_confidence": 0.5,
+      "voting_window": 35
+    },
+    "counter": {
+      "enabled": true,
+      "always": false,
+      "comment": "If enabled, zones must be configured per channel"
+    }
+  },
   "metadata": {
     "total_channels": 4,
     "created_at": "2024-01-01",
-    "updated_at": "2024-01-01"
+    "updated_at": "2025-11-03"
   }
 }
