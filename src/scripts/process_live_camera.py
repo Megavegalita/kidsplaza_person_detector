@@ -16,7 +16,7 @@ import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, cast
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 import cv2  # noqa: E402
 import numpy as np
@@ -51,6 +51,9 @@ from src.modules.reid.cache import ReIDCache  # noqa: E402
 from src.modules.reid.embedder import ReIDEmbedder  # noqa: E402
 from src.modules.reid.integrator import integrate_reid_for_tracks  # noqa: E402
 from src.modules.tracking.tracker import Tracker  # noqa: E402
+from src.modules.counter.zone_counter import ZoneCounter  # noqa: E402
+from src.modules.counter.daily_person_counter import DailyPersonCounter  # noqa: E402
+from src.modules.counter.person_identity_manager import PersonIdentityManager  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -110,6 +113,8 @@ class LiveCameraProcessor:
         reconnect_interval_seconds: float = 5.0,
         display: bool = False,
         display_fps: float = 15.0,
+        counter_zones: Optional[List[Dict[str, Any]]] = None,
+        detect_every_n: Optional[int] = None,
     ) -> None:
         """
         Initialize live camera processor.
@@ -395,11 +400,30 @@ class LiveCameraProcessor:
         # Resize for display to reduce lag (max width 1280)
         self.display_max_width = 1280
 
+        # Counter initialization (PID disabled) — always use ZoneCounter
+        # Zones will be loaded from camera config if counter is enabled
+        self.person_identity_manager = None
+        if counter_zones and len(counter_zones) > 0:
+            try:
+                self.counter = ZoneCounter(counter_zones)
+                logger.info(
+                    "ZoneCounter initialized with %d zones for channel %d",
+                    len(counter_zones),
+                    channel_id,
+                )
+            except Exception as e:
+                logger.error("Failed to initialize ZoneCounter: %s", e, exc_info=True)
+                self.counter = None
+        else:
+            self.counter = None
+
         # Face verification no longer needed - using face-based detection directly
 
         # Frame skipping for detection (detect every N frames to boost FPS)
-        # Channel 4 needs more frequent detection to catch faces better
-        if channel_id == 4:
+        # Use config value if provided, otherwise channel-specific defaults
+        if detect_every_n is not None:
+            self.detect_every_n = detect_every_n
+        elif channel_id == 4:
             self.detect_every_n = (
                 2  # Detect every 2 frames for Channel 4 (better coverage)
             )
@@ -775,15 +799,8 @@ class LiveCameraProcessor:
                                 display_det["gender_confidence"] = gender_conf
                         display_detections.append(display_det)
 
+                # Defer annotation until after Re-ID and Counter so PID can be rendered
                 annotated = None
-                if self.display:
-                    # Only annotate when we have detections to show
-                    if len(display_detections) > 0:
-                        # Use detections with gender/age info for annotation
-                        annotated = self.processor.draw_detections(
-                            frame, display_detections
-                        )
-                    # Otherwise show original frame (no stale bounding boxes)
 
                 # Face verification no longer needed since we're using face-based detection
                 # All detections already have faces (detected from faces directly)
@@ -814,14 +831,132 @@ class LiveCameraProcessor:
                             append_mode=self.reid_append_mode,
                             aggregation_method=self.reid_aggregation_method,
                         )
+                        
+                        # Extract Re-ID embeddings from cache and add to detections
+                        # for PersonIdentityManager to resolve person_id
+                        if (
+                            self.person_identity_manager is not None
+                            and self.reid_embedder is not None
+                        ):
+                            import numpy as np
+                            from typing import cast as _cast
+                            # Try to attach embedding/person_id from cache; if missing, compute on-demand (limited)
+                            on_demand_budget = 10  # compute up to 10 embeddings per frame to ensure PID resolution
+                            for det in detections:
+                                track_id = det.get("track_id")
+                                if track_id is None:
+                                    continue
+                                got_embedding = False
+                                # Prefer cache if available
+                                try:
+                                    if self.reid_cache is not None:
+                                        cached_item = self.reid_cache.get(session_id, int(track_id))
+                                        if cached_item is not None and cached_item.embedding is not None:
+                                            det["reid_embedding"] = cached_item.embedding
+                                            det["channel_id"] = self.channel_id
+                                            pid = self.person_identity_manager.get_or_assign_person_id(
+                                                channel_id=self.channel_id,
+                                                track_id=int(track_id),
+                                                embedding=cached_item.embedding,
+                                            )
+                                            if pid:
+                                                det["person_id"] = pid
+                                            got_embedding = True
+                                except Exception as e:
+                                    logger.debug("Re-ID cache get failed for track %d: %s", track_id, e)
+
+                                # On-demand embedding if cache missing and budget remains
+                                if not got_embedding and on_demand_budget > 0:
+                                    try:
+                                        bbox = det.get("bbox")
+                                        if bbox is None:
+                                            continue
+                                        x1, y1, x2, y2 = map(int, bbox)
+                                        crop = self.processor.crop_person(frame, np.array([x1, y1, x2, y2], dtype=np.int32))
+                                        if crop is None:
+                                            continue
+                                        emb = _cast(ReIDEmbedder, self.reid_embedder).embed(crop)
+                                        det["reid_embedding"] = emb
+                                        det["channel_id"] = self.channel_id
+                                        pid = self.person_identity_manager.get_or_assign_person_id(
+                                            channel_id=self.channel_id,
+                                            track_id=int(track_id),
+                                            embedding=emb,
+                                        )
+                                        if pid:
+                                            det["person_id"] = pid
+                                        on_demand_budget -= 1
+                                    except Exception as e:
+                                        logger.debug("On-demand Re-ID embedding failed for track %d: %s", track_id, e)
                     except Exception as e:
                         logger.warning("Re-ID integration error: %s", e)
+
+                # Always try to attach person_id from cache every frame (independent of counter)
+                if self.reid_enable and self.person_identity_manager is not None and self.reid_cache is not None:
+                    for det in detections:
+                        track_id = det.get("track_id")
+                        if track_id is None:
+                            continue
+                        try:
+                            cached_item = self.reid_cache.get(session_id, int(track_id))
+                            if cached_item is not None and cached_item.embedding is not None:
+                                # Resolve/assign person_id using cached embedding
+                                pid_cached = self.person_identity_manager.get_or_assign_person_id(
+                                    channel_id=self.channel_id,
+                                    track_id=int(track_id),
+                                    embedding=cached_item.embedding,
+                                )
+                                if pid_cached:
+                                    det["person_id"] = pid_cached
+                        except Exception as e:
+                            logger.debug("Attach PID from cache failed for track %d: %s", track_id, e)
 
                 # Update unique track id set
                 for d in detections:
                     t_id = d.get("track_id")
                     if t_id is not None:
                         unique_track_ids.add(int(t_id))
+
+                # Counter update (if enabled) — after Re-ID so detections may include person_id
+                counter_result = None
+                if self.counter is not None and len(detections) > 0:
+                    try:
+                        counter_result = self.counter.update(detections, frame, frame_num=frame_num)
+                        if counter_result.get("events"):
+                            for event in counter_result["events"]:
+                                logger.info(
+                                    "Counter event: %s - Zone: %s (%s), Track: %d",
+                                    event["type"],
+                                    event["zone_id"],
+                                    event["zone_name"],
+                                    event["track_id"],
+                                )
+                                # DB write (non-blocking best-effort)
+                                if self.db_manager is not None:
+                                    try:
+                                        self.db_manager.insert_counter_event(
+                                            channel_id=self.channel_id,
+                                            zone_id=str(event.get("zone_id")),
+                                            zone_name=str(event.get("zone_name")),
+                                            event_type=str(event.get("type")),
+                                            track_id=int(event.get("track_id")) if event.get("track_id") is not None else None,
+                                            person_id=None,
+                                            frame_number=int(frame_num),
+                                            extra_json={"run_id": self.run_id or "", "session_id": session_id},
+                                        )
+                                    except Exception as e:
+                                        logger.debug("Failed to insert counter_event: %s", e)
+                    except Exception as e:
+                        logger.warning("Counter update error: %s", e)
+
+                # Now render overlay after Re-ID and Counter so PID shows up
+                if self.display:
+                    if annotated is None:
+                        annotated = frame.copy()
+                    if len(display_detections) > 0:
+                        annotated = self.processor.draw_detections(annotated, display_detections)
+                    if self.counter is not None:
+                        annotated = self.counter.draw_zones(annotated)
 
                 # Gender and Age classification (PyTorch-based, no TensorFlow)
                 if (
@@ -1696,7 +1831,13 @@ def main() -> None:
                 db_dsn = db_config.get("postgresql", {}).get("dsn")
                 redis_url = db_config.get("redis", {}).get("url")
 
+        # If DB DSN available, enable DB writes by default
+        if db_dsn:
+            processor_args["db_enable"] = True
+            processor_args["db_dsn"] = db_dsn
+
         # Create processor (reuse VideoProcessor args pattern)
+        # Initialize with defaults - will be overridden by config
         processor_args = {
             "camera_id": 1,  # TODO: get from config
             "channel_id": args.channel_id,
@@ -1706,12 +1847,13 @@ def main() -> None:
             "run_id": args.run_id,
             "max_frames": args.max_frames,
             "display": args.display,
-            "display_fps": getattr(
-                args, "display_fps", 12.0
-            ),  # Lower default for smoother display
-            "conf_threshold": getattr(
-                args, "conf_threshold", 0.5
-            ),  # Face detection confidence (0.5 = higher quality faces)
+            "display_fps": getattr(args, "display_fps", 12.0),
+            "conf_threshold": getattr(args, "conf_threshold", 0.5),
+            # Tracker defaults (will be overridden by config)
+            "tracker_max_age": 30,
+            "tracker_min_hits": 2,
+            "tracker_iou_threshold": 0.3,
+            "tracker_ema_alpha": 0.5,
         }
 
         # Apply preset if specified
@@ -1752,6 +1894,77 @@ def main() -> None:
         # Override gender_enable if explicitly set via command line
         if hasattr(args, "gender_enable") and args.gender_enable:
             processor_args["gender_enable"] = True
+
+        # Load feature config from camera config
+        try:
+            channel_features = camera_config.get_channel_features(args.channel_id)
+            
+            # Load body detection config
+            body_config = channel_features.get("body_detection", {})
+            if "conf_threshold" not in processor_args or processor_args.get("conf_threshold") == 0.5:
+                # Only override if using default
+                processor_args["conf_threshold"] = body_config.get("conf_threshold", 0.5)
+            
+            # Load detect_every_n from config (per-channel override)
+            if "detect_every_n" in body_config:
+                processor_args["detect_every_n"] = body_config.get("detect_every_n")
+            
+            # Load tracking config
+            tracking_config = channel_features.get("tracking", {})
+            if tracking_config.get("enabled", True):
+                processor_args["tracker_max_age"] = tracking_config.get("max_age", 30)
+                processor_args["tracker_min_hits"] = tracking_config.get("min_hits", 2)
+                processor_args["tracker_iou_threshold"] = tracking_config.get("iou_threshold", 0.3)
+                processor_args["tracker_ema_alpha"] = tracking_config.get("ema_alpha", 0.5)
+            
+            # Load Re-ID config if not in preset
+            if args.preset != "gender_main_v1":
+                reid_config = channel_features.get("reid", {})
+                if reid_config.get("enabled", False):
+                    processor_args["reid_enable"] = True
+                    processor_args["reid_every_k"] = reid_config.get("every_k_frames", 20)
+                    processor_args["reid_ttl_seconds"] = reid_config.get("ttl_seconds", 60)
+                    processor_args["reid_similarity_threshold"] = reid_config.get("similarity_threshold", 0.65)
+                    processor_args["reid_aggregation_method"] = reid_config.get("aggregation_method", "single")
+                    processor_args["reid_append_mode"] = reid_config.get("append_mode", False)
+                    processor_args["reid_max_embeddings"] = reid_config.get("max_embeddings", 1)
+                    # Prefer ArcFace face-based embeddings (GPU-capable)
+                    processor_args["reid_use_face"] = True
+            
+            # Load gender classification config if not explicitly set
+            if not hasattr(args, "gender_enable") or not args.gender_enable:
+                gender_config = channel_features.get("gender_classification", {})
+                if gender_config.get("enabled", False):
+                    processor_args["gender_enable"] = True
+                    processor_args["gender_every_k"] = gender_config.get("every_k_frames", 20)
+                    processor_args["gender_model_type"] = gender_config.get("model_type", "timm_mobile")
+                    processor_args["gender_min_confidence"] = gender_config.get("min_confidence", 0.5)
+                    processor_args["gender_female_min_confidence"] = gender_config.get("female_min_confidence")
+                    processor_args["gender_male_min_confidence"] = gender_config.get("male_min_confidence")
+                    processor_args["gender_voting_window"] = gender_config.get("voting_window", 10)
+                    processor_args["gender_max_per_frame"] = gender_config.get("max_per_frame", 4)
+                    processor_args["gender_adaptive_enabled"] = gender_config.get("adaptive_enabled", False)
+            
+            # Load counter config
+            counter_config = channel_features.get("counter", {})
+            if counter_config.get("enabled", False):
+                counter_zones = counter_config.get("zones", [])
+                if counter_zones and len(counter_zones) > 0:
+                    processor_args["counter_zones"] = counter_zones
+                    logger.info(
+                        "Counter enabled for channel %d with %d zones",
+                        args.channel_id,
+                        len(counter_zones),
+                    )
+                else:
+                    logger.warning(
+                        "Counter enabled for channel %d but no zones configured",
+                        args.channel_id,
+                    )
+        except Exception as e:
+            logger.warning(
+                "Failed to load feature config from camera config: %s", e
+            )
 
         processor = LiveCameraProcessor(**processor_args)
 

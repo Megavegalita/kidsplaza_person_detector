@@ -102,6 +102,118 @@ class CameraConfig:
         """Get total number of channels."""
         return len(self.get_channels())
 
+    def get_default_features(self) -> Dict:
+        """
+        Get default feature configuration.
+
+        Returns:
+            Dictionary with default feature settings
+        """
+        default_features = self.config_data.get("default_features", {})
+        
+        # System defaults if not in config
+        system_defaults = {
+            "body_detection": {"enabled": True, "always": True},
+            "tracking": {"enabled": True, "always": True},
+            "reid": {"enabled": True, "always": False},
+            "gender_classification": {"enabled": True, "always": False},
+            "counter": {"enabled": True, "always": False},
+        }
+        
+        # Merge config defaults with system defaults
+        merged = system_defaults.copy()
+        for feature_name, feature_config in default_features.items():
+            merged[feature_name] = {**system_defaults.get(feature_name, {}), **feature_config}
+        
+        return merged
+
+    def get_channel_features(self, channel_id: int) -> Dict:
+        """
+        Get feature configuration for specific channel.
+
+        Args:
+            channel_id: Channel ID to retrieve features for
+
+        Returns:
+            Dictionary with feature configurations, merged from channel-specific
+            and default features
+
+        Raises:
+            CameraConfigError: If channel not found
+        """
+        channel = self.get_channel(channel_id)
+        if channel is None:
+            raise CameraConfigError(f"Channel {channel_id} not found")
+
+        # Get default features
+        default_features = self.get_default_features()
+        
+        # Get channel-specific features (if any)
+        channel_features = channel.get("features", {})
+        
+        # Merge: channel-specific overrides defaults
+        merged_features = default_features.copy()
+        for feature_name, feature_config in channel_features.items():
+            if feature_name in merged_features:
+                # Merge nested dicts
+                merged_features[feature_name] = {
+                    **merged_features[feature_name],
+                    **feature_config
+                }
+            else:
+                merged_features[feature_name] = feature_config
+        
+        return merged_features
+
+    def get_feature_config(
+        self, channel_id: int, feature_name: str
+    ) -> Optional[Dict]:
+        """
+        Get configuration for specific feature on specific channel.
+
+        Args:
+            channel_id: Channel ID
+            feature_name: Name of feature (e.g., 'reid', 'gender_classification', 'counter')
+
+        Returns:
+            Feature configuration dictionary or None if not found
+        """
+        features = self.get_channel_features(channel_id)
+        return features.get(feature_name)
+
+    def is_feature_enabled(
+        self, channel_id: int, feature_name: str
+    ) -> bool:
+        """
+        Check if a feature is enabled for a specific channel.
+
+        Args:
+            channel_id: Channel ID
+            feature_name: Name of feature to check
+
+        Returns:
+            True if feature is enabled, False otherwise
+        """
+        feature_config = self.get_feature_config(channel_id, feature_name)
+        if feature_config is None:
+            return False
+        
+        return feature_config.get("enabled", False)
+
+    def is_feature_always_enabled(self, feature_name: str) -> bool:
+        """
+        Check if a feature is always enabled (cannot be disabled).
+
+        Args:
+            feature_name: Name of feature to check
+
+        Returns:
+            True if feature is always enabled, False otherwise
+        """
+        default_features = self.get_default_features()
+        feature_config = default_features.get(feature_name, {})
+        return feature_config.get("always", False)
+
 
 def load_camera_config(config_path: Path) -> CameraConfig:
     """
