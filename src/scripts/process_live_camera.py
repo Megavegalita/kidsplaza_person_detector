@@ -28,34 +28,35 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.modules.camera.camera_config import load_camera_config  # noqa: E402
 from src.modules.camera.camera_reader import CameraReader  # noqa: E402
 from src.modules.camera.camera_reader import CameraReaderError
+from src.modules.counter.daily_person_counter import \
+    DailyPersonCounter  # noqa: E402
+from src.modules.counter.person_identity_manager import \
+    PersonIdentityManager  # noqa: E402
+from src.modules.counter.zone_counter import ZoneCounter  # noqa: E402
 from src.modules.database.models import PersonDetection  # noqa: E402
 from src.modules.database.postgres_manager import PostgresManager  # noqa: E402
 from src.modules.database.redis_manager import RedisManager  # noqa: E402
-
 # PyTorch-based gender/age classification (no TensorFlow/MediaPipe conflicts)
-from src.modules.demographics.async_worker import AsyncGenderWorker  # noqa: E402
-from src.modules.demographics.face_gender_classifier import (
-    FaceGenderClassifier,
-)  # noqa: E402
+from src.modules.demographics.async_worker import \
+    AsyncGenderWorker  # noqa: E402
+from src.modules.demographics.face_gender_classifier import \
+    FaceGenderClassifier  # noqa: E402
 from src.modules.demographics.gender_opencv import GenderOpenCV  # noqa: E402
 from src.modules.demographics.metrics import GenderMetrics  # noqa: E402
 from src.modules.detection.detector import Detector  # noqa: E402
 from src.modules.detection.face_detector_opencv import FaceDetectorOpenCV
 from src.modules.detection.face_detector_retinaface import (  # noqa: E402
-    RETINAFACE_AVAILABLE,
-    FaceDetectorRetinaFace,
-)
+    RETINAFACE_AVAILABLE, FaceDetectorRetinaFace)
 from src.modules.detection.image_processor import ImageProcessor  # noqa: E402
-from src.modules.detection.staff_classifier import StaffClassifier  # noqa: E402
-from src.modules.detection.staff_voting_cache import StaffVotingCache  # noqa: E402
+from src.modules.detection.staff_classifier import \
+    StaffClassifier  # noqa: E402
+from src.modules.detection.staff_voting_cache import \
+    StaffVotingCache  # noqa: E402
 from src.modules.reid.arcface_embedder import ArcFaceEmbedder  # noqa: E402
 from src.modules.reid.cache import ReIDCache  # noqa: E402
 from src.modules.reid.embedder import ReIDEmbedder  # noqa: E402
 from src.modules.reid.integrator import integrate_reid_for_tracks  # noqa: E402
 from src.modules.tracking.tracker import Tracker  # noqa: E402
-from src.modules.counter.zone_counter import ZoneCounter  # noqa: E402
-from src.modules.counter.daily_person_counter import DailyPersonCounter  # noqa: E402
-from src.modules.counter.person_identity_manager import PersonIdentityManager  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -145,6 +146,7 @@ class LiveCameraProcessor:
         base_output.mkdir(parents=True, exist_ok=True)
         if run_id is None:
             run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.run_id = str(run_id)  # Store run_id for database logging
         self.output_dir = base_output / str(run_id)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -318,14 +320,21 @@ class LiveCameraProcessor:
         if self.db_enable and db_dsn:
             try:
                 self.db_manager = PostgresManager(dsn=db_dsn)
-                logger.info("DB manager initialized successfully for channel %d", self.channel_id)
+                logger.info(
+                    "DB manager initialized successfully for channel %d",
+                    self.channel_id,
+                )
             except Exception as e:
                 logger.warning("DB init failed: %s", e)
                 self.db_manager = None
                 self.db_enable = False
         else:
-            logger.info("DB disabled or DSN not provided for channel %d (db_enable=%s, db_dsn=%s)", 
-                       self.channel_id, self.db_enable, "provided" if db_dsn else "None")
+            logger.info(
+                "DB disabled or DSN not provided for channel %d (db_enable=%s, db_dsn=%s)",
+                self.channel_id,
+                self.db_enable,
+                "provided" if db_dsn else "None",
+            )
 
         self.redis_enable = bool(redis_enable)
         self.redis_manager: Optional[RedisManager] = None
@@ -813,7 +822,7 @@ class LiveCameraProcessor:
                     detections, frame=frame, session_id=session_id
                 )
                 detections = tracked_detections
-                
+
                 # Update unique_track_ids from ALL tracked detections (before filtering)
                 # This ensures stats reflect all tracks, not just customers
                 for d in detections:
@@ -823,7 +832,11 @@ class LiveCameraProcessor:
 
                 # Log tracker stats for debugging (including when no detections)
                 if frame_num % 100 == 0:
-                    track_ids = [d.get("track_id") for d in detections if d.get("track_id") is not None]
+                    track_ids = [
+                        d.get("track_id")
+                        for d in detections
+                        if d.get("track_id") is not None
+                    ]
                     logger.info(
                         "Tracker update: %d detections, %d with track_id: %s (should_detect=%s)",
                         len(detections),
@@ -844,7 +857,11 @@ class LiveCameraProcessor:
                 ):
                     # Debug: Log when staff classification block is entered
                     if frame_num % 50 == 0:
-                        track_ids = [d.get("track_id") for d in detections if d.get("track_id") is not None]
+                        track_ids = [
+                            d.get("track_id")
+                            for d in detections
+                            if d.get("track_id") is not None
+                        ]
                         logger.info(
                             "Staff classification block: %d detections, %d with track_id: %s",
                             len(detections),
@@ -872,8 +889,8 @@ class LiveCameraProcessor:
                             track_id_int = int(track_id)
 
                             # Check if classification is fixed in cache
-                            cached_classification = self.staff_voting_cache.get_classification(
-                                track_id_int
+                            cached_classification = (
+                                self.staff_voting_cache.get_classification(track_id_int)
                             )
 
                             if cached_classification is not None:
@@ -897,35 +914,53 @@ class LiveCameraProcessor:
                                         # Crop person region
                                         x1, y1, x2, y2 = map(int, bbox)
                                         # Create bbox array (np is imported at module level)
-                                        bbox_array = np.array([x1, y1, x2, y2], dtype=np.int32)
-                                        person_crop = self.processor.crop_person(frame, bbox_array)
+                                        bbox_array = np.array(
+                                            [x1, y1, x2, y2], dtype=np.int32
+                                        )
+                                        person_crop = self.processor.crop_person(
+                                            frame, bbox_array
+                                        )
 
                                         if person_crop is not None:
                                             try:
                                                 # Classify as staff or customer
-                                                person_type, staff_confidence = (
-                                                    self.staff_classifier.classify(person_crop)
+                                                (
+                                                    person_type,
+                                                    staff_confidence,
+                                                ) = self.staff_classifier.classify(
+                                                    person_crop
                                                 )
 
                                                 # Default to customer if classification fails
-                                                if person_type not in ["staff", "customer"]:
+                                                if person_type not in [
+                                                    "staff",
+                                                    "customer",
+                                                ]:
                                                     person_type = "customer"
                                                     staff_confidence = 0.0
 
                                                 # Vote with confidence weighting
-                                                final_classification, is_fixed = (
-                                                    self.staff_voting_cache.vote(
-                                                        track_id=track_id_int,
-                                                        classification=person_type,
-                                                        confidence=staff_confidence,
-                                                        frame_num=frame_num,
-                                                    )
+                                                (
+                                                    final_classification,
+                                                    is_fixed,
+                                                ) = self.staff_voting_cache.vote(
+                                                    track_id=track_id_int,
+                                                    classification=person_type,
+                                                    confidence=staff_confidence,
+                                                    frame_num=frame_num,
                                                 )
 
                                                 # Set is_staff flag
-                                                if is_fixed and final_classification is not None:
-                                                    det["is_staff"] = final_classification == "staff"
-                                                    det["person_type"] = final_classification
+                                                if (
+                                                    is_fixed
+                                                    and final_classification is not None
+                                                ):
+                                                    det["is_staff"] = (
+                                                        final_classification == "staff"
+                                                    )
+                                                    det[
+                                                        "person_type"
+                                                    ] = final_classification
                                                     logger.info(
                                                         "Staff classification [track %d]: FIXED=%s (votes: type=%s, conf=%.3f)",
                                                         track_id_int,
@@ -935,7 +970,9 @@ class LiveCameraProcessor:
                                                     )
                                                 else:
                                                     # Still voting, use current classification temporarily
-                                                    det["is_staff"] = person_type == "staff"
+                                                    det["is_staff"] = (
+                                                        person_type == "staff"
+                                                    )
                                                     det["person_type"] = person_type
                                                     logger.info(
                                                         "Staff classification [track %d]: VOTING (type=%s, conf=%.3f)",
@@ -957,7 +994,9 @@ class LiveCameraProcessor:
                                         # If not fixed yet, default to customer (will be updated on next detection frame)
                                         if cached_classification is None:
                                             det["is_staff"] = False
-                                            det["person_type"] = None  # Not classified yet
+                                            det[
+                                                "person_type"
+                                            ] = None  # Not classified yet
                                 else:
                                     # No bbox, cannot classify
                                     if cached_classification is None:
@@ -971,7 +1010,7 @@ class LiveCameraProcessor:
                 # Staff detections will be skipped from Re-ID and Counter processing
                 customer_detections = []
                 staff_detections = []
-                
+
                 if self.staff_detection_enable and self.staff_voting_cache is not None:
                     # Split detections based on is_staff flag
                     for det in detections:
@@ -1014,7 +1053,7 @@ class LiveCameraProcessor:
                                 display_det["gender"] = gender
                                 display_det["gender_confidence"] = gender_conf
                         display_detections.append(display_det)
-                    
+
                     # Add staff detections (no gender info needed)
                     for d in staff_detections:
                         display_det = d.copy()
@@ -1052,7 +1091,7 @@ class LiveCameraProcessor:
                             append_mode=self.reid_append_mode,
                             aggregation_method=self.reid_aggregation_method,
                         )
-                        
+
                         # Extract Re-ID embeddings from cache and add to detections
                         # for PersonIdentityManager to resolve person_id
                         if (
@@ -1061,6 +1100,7 @@ class LiveCameraProcessor:
                         ):
                             # np is already imported at module level
                             from typing import cast as _cast
+
                             # Try to attach embedding/person_id from cache; if missing, compute on-demand (limited)
                             on_demand_budget = 10  # compute up to 10 embeddings per frame to ensure PID resolution
                             for det in customer_detections:  # Only process customers
@@ -1071,9 +1111,16 @@ class LiveCameraProcessor:
                                 # Prefer cache if available
                                 try:
                                     if self.reid_cache is not None:
-                                        cached_item = self.reid_cache.get(session_id, int(track_id))
-                                        if cached_item is not None and cached_item.embedding is not None:
-                                            det["reid_embedding"] = cached_item.embedding
+                                        cached_item = self.reid_cache.get(
+                                            session_id, int(track_id)
+                                        )
+                                        if (
+                                            cached_item is not None
+                                            and cached_item.embedding is not None
+                                        ):
+                                            det[
+                                                "reid_embedding"
+                                            ] = cached_item.embedding
                                             det["channel_id"] = self.channel_id
                                             pid = self.person_identity_manager.get_or_assign_person_id(
                                                 channel_id=self.channel_id,
@@ -1084,7 +1131,11 @@ class LiveCameraProcessor:
                                                 det["person_id"] = pid
                                             got_embedding = True
                                 except Exception as e:
-                                    logger.debug("Re-ID cache get failed for track %d: %s", track_id, e)
+                                    logger.debug(
+                                        "Re-ID cache get failed for track %d: %s",
+                                        track_id,
+                                        e,
+                                    )
 
                                 # On-demand embedding if cache missing and budget remains
                                 if not got_embedding and on_demand_budget > 0:
@@ -1093,10 +1144,15 @@ class LiveCameraProcessor:
                                         if bbox is None:
                                             continue
                                         x1, y1, x2, y2 = map(int, bbox)
-                                        crop = self.processor.crop_person(frame, np.array([x1, y1, x2, y2], dtype=np.int32))
+                                        crop = self.processor.crop_person(
+                                            frame,
+                                            np.array([x1, y1, x2, y2], dtype=np.int32),
+                                        )
                                         if crop is None:
                                             continue
-                                        emb = _cast(ReIDEmbedder, self.reid_embedder).embed(crop)
+                                        emb = _cast(
+                                            ReIDEmbedder, self.reid_embedder
+                                        ).embed(crop)
                                         det["reid_embedding"] = emb
                                         det["channel_id"] = self.channel_id
                                         pid = self.person_identity_manager.get_or_assign_person_id(
@@ -1108,20 +1164,31 @@ class LiveCameraProcessor:
                                             det["person_id"] = pid
                                         on_demand_budget -= 1
                                     except Exception as e:
-                                        logger.debug("On-demand Re-ID embedding failed for track %d: %s", track_id, e)
+                                        logger.debug(
+                                            "On-demand Re-ID embedding failed for track %d: %s",
+                                            track_id,
+                                            e,
+                                        )
                     except Exception as e:
                         logger.warning("Re-ID integration error: %s", e)
 
                 # Always try to attach person_id from cache every frame (independent of counter)
                 # Only for customer detections
-                if self.reid_enable and self.person_identity_manager is not None and self.reid_cache is not None:
+                if (
+                    self.reid_enable
+                    and self.person_identity_manager is not None
+                    and self.reid_cache is not None
+                ):
                     for det in customer_detections:  # Only process customers
                         track_id = det.get("track_id")
                         if track_id is None:
                             continue
                         try:
                             cached_item = self.reid_cache.get(session_id, int(track_id))
-                            if cached_item is not None and cached_item.embedding is not None:
+                            if (
+                                cached_item is not None
+                                and cached_item.embedding is not None
+                            ):
                                 # Resolve/assign person_id using cached embedding
                                 pid_cached = self.person_identity_manager.get_or_assign_person_id(
                                     channel_id=self.channel_id,
@@ -1131,7 +1198,11 @@ class LiveCameraProcessor:
                                 if pid_cached:
                                     det["person_id"] = pid_cached
                         except Exception as e:
-                            logger.debug("Attach PID from cache failed for track %d: %s", track_id, e)
+                            logger.debug(
+                                "Attach PID from cache failed for track %d: %s",
+                                track_id,
+                                e,
+                            )
 
                 # Note: unique_track_ids already updated from all detections above
                 # This ensures stats include all tracks (staff + customer) for continuity tracking
@@ -1140,7 +1211,9 @@ class LiveCameraProcessor:
                 counter_result = None
                 if self.counter is not None and len(customer_detections) > 0:
                     try:
-                        counter_result = self.counter.update(customer_detections, frame, frame_num=frame_num)
+                        counter_result = self.counter.update(
+                            customer_detections, frame, frame_num=frame_num
+                        )
                         if counter_result.get("events"):
                             for event in counter_result["events"]:
                                 logger.info(
@@ -1168,26 +1241,41 @@ class LiveCameraProcessor:
                                             zone_id=str(event.get("zone_id")),
                                             zone_name=str(event.get("zone_name")),
                                             event_type=str(event.get("type")),
-                                            track_id=int(event.get("track_id")) if event.get("track_id") is not None else None,
+                                            track_id=int(event.get("track_id"))
+                                            if event.get("track_id") is not None
+                                            else None,
                                             person_id=event.get("person_id"),
                                             frame_number=int(frame_num),
-                                            extra_json={"run_id": self.run_id or "", "session_id": session_id},
+                                            extra_json={
+                                                "run_id": self.run_id or "",
+                                                "session_id": session_id,
+                                            },
                                         )
                                     except Exception as e:
-                                        logger.warning("Failed to insert counter_event: %s", e, exc_info=True)
+                                        logger.warning(
+                                            "Failed to insert counter_event: %s",
+                                            e,
+                                            exc_info=True,
+                                        )
                     except Exception as e:
                         logger.warning("Counter update error: %s", e)
 
                 # Merge customer and staff detections for display
                 # Staff will be displayed with red boxes, customers with green boxes
-                all_detections_for_display = display_detections if self.display else (customer_detections + staff_detections)
+                all_detections_for_display = (
+                    display_detections
+                    if self.display
+                    else (customer_detections + staff_detections)
+                )
 
                 # Now render overlay after Re-ID and Counter so PID shows up
                 if self.display:
                     if annotated is None:
                         annotated = frame.copy()
                     if len(all_detections_for_display) > 0:
-                        annotated = self.processor.draw_detections(annotated, all_detections_for_display)
+                        annotated = self.processor.draw_detections(
+                            annotated, all_detections_for_display
+                        )
                     if self.counter is not None:
                         annotated = self.counter.draw_zones(annotated)
 
@@ -1658,9 +1746,7 @@ class LiveCameraProcessor:
             return
 
         # Filter out staff detections - only store customers
-        customer_detections = [
-            d for d in detections if d.get("is_staff") is not True
-        ]
+        customer_detections = [d for d in detections if d.get("is_staff") is not True]
 
         if len(customer_detections) == 0:
             return
@@ -2073,10 +2159,7 @@ def main() -> None:
                 db_config = json.load(f)
                 pg = db_config.get("postgresql", {}) or {}
                 # Prefer explicit dsn, then url, then compose
-                db_dsn = (
-                    pg.get("dsn")
-                    or pg.get("url")
-                )
+                db_dsn = pg.get("dsn") or pg.get("url")
                 if not db_dsn:
                     user = pg.get("username") or ""
                     pwd = pg.get("password") or ""
@@ -2155,86 +2238,146 @@ def main() -> None:
         # Load feature config from camera config
         try:
             channel_features = camera_config.get_channel_features(args.channel_id)
-            
+
             # Load body detection config
             body_config = channel_features.get("body_detection", {})
-            if "conf_threshold" not in processor_args or processor_args.get("conf_threshold") == 0.5:
+            if (
+                "conf_threshold" not in processor_args
+                or processor_args.get("conf_threshold") == 0.5
+            ):
                 # Only override if using default
-                processor_args["conf_threshold"] = body_config.get("conf_threshold", 0.5)
-            
+                processor_args["conf_threshold"] = body_config.get(
+                    "conf_threshold", 0.5
+                )
+
             # Load detect_every_n from config (per-channel override)
             if "detect_every_n" in body_config:
                 processor_args["detect_every_n"] = body_config.get("detect_every_n")
-            
+
             # Load tracking config
             tracking_config = channel_features.get("tracking", {})
             if tracking_config.get("enabled", True):
                 processor_args["tracker_max_age"] = tracking_config.get("max_age", 30)
                 processor_args["tracker_min_hits"] = tracking_config.get("min_hits", 2)
-                processor_args["tracker_iou_threshold"] = tracking_config.get("iou_threshold", 0.3)
-                processor_args["tracker_ema_alpha"] = tracking_config.get("ema_alpha", 0.5)
-            
+                processor_args["tracker_iou_threshold"] = tracking_config.get(
+                    "iou_threshold", 0.3
+                )
+                processor_args["tracker_ema_alpha"] = tracking_config.get(
+                    "ema_alpha", 0.5
+                )
+
             # Load Re-ID config if not in preset
             if args.preset != "gender_main_v1":
                 reid_config = channel_features.get("reid", {})
                 if reid_config.get("enabled", False):
                     processor_args["reid_enable"] = True
-                    processor_args["reid_every_k"] = reid_config.get("every_k_frames", 20)
-                    processor_args["reid_ttl_seconds"] = reid_config.get("ttl_seconds", 60)
-                    processor_args["reid_similarity_threshold"] = reid_config.get("similarity_threshold", 0.65)
-                    processor_args["reid_aggregation_method"] = reid_config.get("aggregation_method", "single")
-                    processor_args["reid_append_mode"] = reid_config.get("append_mode", False)
-                    processor_args["reid_max_embeddings"] = reid_config.get("max_embeddings", 1)
+                    processor_args["reid_every_k"] = reid_config.get(
+                        "every_k_frames", 20
+                    )
+                    processor_args["reid_ttl_seconds"] = reid_config.get(
+                        "ttl_seconds", 60
+                    )
+                    processor_args["reid_similarity_threshold"] = reid_config.get(
+                        "similarity_threshold", 0.65
+                    )
+                    processor_args["reid_aggregation_method"] = reid_config.get(
+                        "aggregation_method", "single"
+                    )
+                    processor_args["reid_append_mode"] = reid_config.get(
+                        "append_mode", False
+                    )
+                    processor_args["reid_max_embeddings"] = reid_config.get(
+                        "max_embeddings", 1
+                    )
                     # Prefer ArcFace face-based embeddings (GPU-capable)
                     processor_args["reid_use_face"] = True
-            
+
             # Load gender classification config if not explicitly set
             if not hasattr(args, "gender_enable") or not args.gender_enable:
                 gender_config = channel_features.get("gender_classification", {})
                 if gender_config.get("enabled", False):
                     processor_args["gender_enable"] = True
-                    processor_args["gender_every_k"] = gender_config.get("every_k_frames", 20)
-                    processor_args["gender_model_type"] = gender_config.get("model_type", "timm_mobile")
-                    processor_args["gender_min_confidence"] = gender_config.get("min_confidence", 0.5)
-                    processor_args["gender_female_min_confidence"] = gender_config.get("female_min_confidence")
-                    processor_args["gender_male_min_confidence"] = gender_config.get("male_min_confidence")
-                    processor_args["gender_voting_window"] = gender_config.get("voting_window", 10)
-                    processor_args["gender_max_per_frame"] = gender_config.get("max_per_frame", 4)
-                    processor_args["gender_adaptive_enabled"] = gender_config.get("adaptive_enabled", False)
-            
+                    processor_args["gender_every_k"] = gender_config.get(
+                        "every_k_frames", 20
+                    )
+                    processor_args["gender_model_type"] = gender_config.get(
+                        "model_type", "timm_mobile"
+                    )
+                    processor_args["gender_min_confidence"] = gender_config.get(
+                        "min_confidence", 0.5
+                    )
+                    processor_args["gender_female_min_confidence"] = gender_config.get(
+                        "female_min_confidence"
+                    )
+                    processor_args["gender_male_min_confidence"] = gender_config.get(
+                        "male_min_confidence"
+                    )
+                    processor_args["gender_voting_window"] = gender_config.get(
+                        "voting_window", 10
+                    )
+                    processor_args["gender_max_per_frame"] = gender_config.get(
+                        "max_per_frame", 4
+                    )
+                    processor_args["gender_adaptive_enabled"] = gender_config.get(
+                        "adaptive_enabled", False
+                    )
+
             # Load staff detection config
             staff_config = channel_features.get("staff_detection", {})
             if staff_config.get("enabled", False):
                 processor_args["staff_detection_enable"] = True
-                processor_args["staff_detection_model_path"] = staff_config.get("model_path", "models/kidsplaza/best.pt")
-                processor_args["staff_detection_conf_threshold"] = staff_config.get("conf_threshold", 0.5)
+                processor_args["staff_detection_model_path"] = staff_config.get(
+                    "model_path", "models/kidsplaza/best.pt"
+                )
+                processor_args["staff_detection_conf_threshold"] = staff_config.get(
+                    "conf_threshold", 0.5
+                )
                 logger.info(
                     "Staff detection enabled for channel %d: model=%s, conf=%.2f",
                     args.channel_id,
                     processor_args["staff_detection_model_path"],
                     processor_args["staff_detection_conf_threshold"],
                 )
-            
+
             # Load counter config
             counter_config = channel_features.get("counter", {})
             if counter_config.get("enabled", False):
                 counter_zones = counter_config.get("zones", [])
                 if counter_zones and len(counter_zones) > 0:
-                    processor_args["counter_zones"] = counter_zones
-                    logger.info(
-                        "Counter enabled for channel %d with %d zones",
-                        args.channel_id,
-                        len(counter_zones),
-                    )
+                    # Filter zones: only include zones with active=true (default true if not specified)
+                    active_zones = [
+                        zone
+                        for zone in counter_zones
+                        if zone.get("active", True) is True
+                    ]
+                    if active_zones and len(active_zones) > 0:
+                        processor_args["counter_zones"] = active_zones
+                        logger.info(
+                            "Counter enabled for channel %d with %d active zones (out of %d total)",
+                            args.channel_id,
+                            len(active_zones),
+                            len(counter_zones),
+                        )
+                        # Log active zone IDs
+                        active_zone_ids = [
+                            z.get("zone_id", "unknown") for z in active_zones
+                        ]
+                        logger.info(
+                            "Active zone IDs: %s",
+                            ", ".join(active_zone_ids),
+                        )
+                    else:
+                        logger.warning(
+                            "Counter enabled for channel %d but no active zones found (all zones inactive)",
+                            args.channel_id,
+                        )
                 else:
                     logger.warning(
                         "Counter enabled for channel %d but no zones configured",
                         args.channel_id,
                     )
         except Exception as e:
-            logger.warning(
-                "Failed to load feature config from camera config: %s", e
-            )
+            logger.warning("Failed to load feature config from camera config: %s", e)
 
         processor = LiveCameraProcessor(**processor_args)
 

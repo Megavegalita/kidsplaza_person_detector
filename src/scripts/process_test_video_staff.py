@@ -7,6 +7,7 @@ This script avoids TensorFlow imports and uses only lightweight modules.
 
 import argparse
 import logging
+import sys
 import time
 from pathlib import Path
 from typing import Optional
@@ -14,7 +15,6 @@ from typing import Optional
 import cv2
 import numpy as np
 
-import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from modules.detection.detector import Detector  # noqa: E402
@@ -48,7 +48,9 @@ def run_video(
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    logger.info("Video opened: %s (%dx%d @ %.2f FPS)", video_path.name, width, height, fps)
+    logger.info(
+        "Video opened: %s (%dx%d @ %.2f FPS)", video_path.name, width, height, fps
+    )
 
     detector = Detector(model_path="yolov8n.pt", conf_threshold=conf_threshold)
     tracker = Tracker(
@@ -111,7 +113,10 @@ def run_video(
 
                 ptype, pconf = staff.classify(crop)
                 final_cls, fixed = vote.vote(
-                    track_id=int(tid), classification=ptype, confidence=pconf, frame_num=frame_num
+                    track_id=int(tid),
+                    classification=ptype,
+                    confidence=pconf,
+                    frame_num=frame_num,
                 )
                 if fixed and final_cls is not None:
                     det["person_type"] = final_cls
@@ -127,7 +132,7 @@ def run_video(
         vis = annotated if annotated is not None else frame.copy()
         vis = imgproc.draw_detections(vis, detections)
         cv2.imshow(window_name, vis)
-        if (cv2.waitKey(1) & 0xFF) == ord('q'):
+        if (cv2.waitKey(1) & 0xFF) == ord("q"):
             logger.info("User pressed 'q', stopping")
             break
 
@@ -139,7 +144,9 @@ def run_video(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Process test video (60s) with display")
+    parser = argparse.ArgumentParser(
+        description="Process test video (60s) with display"
+    )
     parser.add_argument("video_path", type=str, help="Path to input video file")
     parser.add_argument("--conf-threshold", type=float, default=0.5)
     parser.add_argument("--max-seconds", type=int, default=60)
@@ -158,5 +165,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-

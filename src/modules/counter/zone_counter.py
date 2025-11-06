@@ -15,7 +15,9 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
-def point_in_polygon(point: Tuple[float, float], polygon: List[Tuple[float, float]]) -> bool:
+def point_in_polygon(
+    point: Tuple[float, float], polygon: List[Tuple[float, float]]
+) -> bool:
     """
     Check if a point is inside a polygon using ray casting algorithm.
 
@@ -50,7 +52,7 @@ def line_crossing(
     curr_point: Tuple[float, float],
     line_start: Tuple[float, float],
     line_end: Tuple[float, float],
-    side: str = "above"
+    side: str = "above",
 ) -> bool:
     """
     Check if a point crosses a line from a specific side.
@@ -151,11 +153,19 @@ class ZoneCounter:
         self.zone_counts: Dict[str, Dict[str, int]] = {}
         self.track_positions: Dict[int, Dict[str, Tuple[float, float]]] = {}
         self.track_zone_state: Dict[int, Dict[str, bool]] = {}
-        self.track_zone_frame_count: Dict[int, Dict[str, int]] = {}  # Flickering protection
-        self.track_zone_counted: Dict[int, Dict[str, str]] = {}  # Track last counted event: "enter" or "exit" or None
-        self.disappeared_tracks: Dict[int, Dict[str, Any]] = {}  # Track disappeared tracks for position matching
+        self.track_zone_frame_count: Dict[
+            int, Dict[str, int]
+        ] = {}  # Flickering protection
+        self.track_zone_counted: Dict[
+            int, Dict[str, str]
+        ] = {}  # Track last counted event: "enter" or "exit" or None
+        self.disappeared_tracks: Dict[
+            int, Dict[str, Any]
+        ] = {}  # Track disappeared tracks for position matching
         self._frame_size: Optional[Tuple[int, int]] = None  # (width, height)
-        self._position_match_threshold: float = 100.0  # Pixels - max distance to match tracks
+        self._position_match_threshold: float = (
+            100.0  # Pixels - max distance to match tracks
+        )
 
         # Initialize counts for each zone
         for zone in self.zones:
@@ -170,7 +180,9 @@ class ZoneCounter:
 
         logger.info(f"ZoneCounter initialized with {len(self.zones)} zones")
 
-    def _validate_and_parse_zones(self, zones: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _validate_and_parse_zones(
+        self, zones: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
         """
         Validate and parse zone configurations.
 
@@ -211,11 +223,13 @@ class ZoneCounter:
                     raise ValueError(f"Polygon zone {zone_id} must have 'points'")
                 points = zone["points"]
                 if len(points) < 3:
-                    raise ValueError(f"Polygon zone {zone_id} must have at least 3 points")
-                
+                    raise ValueError(
+                        f"Polygon zone {zone_id} must have at least 3 points"
+                    )
+
                 # Check coordinate type
                 coordinate_type = zone.get("coordinate_type", "absolute")
-                
+
                 if coordinate_type == "percentage":
                     # Store percentage values, will convert to absolute when frame size known
                     parsed_points = [tuple(map(float, pt)) for pt in points]
@@ -245,11 +259,28 @@ class ZoneCounter:
 
             elif zone_type == "line":
                 if "start_point" not in zone or "end_point" not in zone:
-                    raise ValueError(f"Line zone {zone_id} must have 'start_point' and 'end_point'")
-                
+                    raise ValueError(
+                        f"Line zone {zone_id} must have 'start_point' and 'end_point'"
+                    )
+
+                # Validate direction if provided
+                direction = zone.get("direction", "one_way")
+                valid_directions = [
+                    "one_way",
+                    "left_to_right",
+                    "right_to_left",
+                    "top_to_bottom",
+                    "bottom_to_top",
+                ]
+                if direction not in valid_directions:
+                    raise ValueError(
+                        f"Line zone {zone_id} has invalid direction '{direction}'. "
+                        f"Valid values: {valid_directions}"
+                    )
+
                 # Check coordinate type
                 coordinate_type = zone.get("coordinate_type", "absolute")
-                
+
                 if coordinate_type == "percentage":
                     # Store percentage values
                     parsed_zone = {
@@ -259,9 +290,10 @@ class ZoneCounter:
                         "coordinate_type": "percentage",
                         "start_point_percent": tuple(map(float, zone["start_point"])),
                         "end_point_percent": tuple(map(float, zone["end_point"])),
-                        "direction": zone.get("direction", "one_way"),
-                        "side": zone.get("side", "above"),
-                        "threshold": zone.get("threshold", 0.5),
+                        "direction": direction,
+                        "side": zone.get("side", "above"),  # Legacy support
+                        "enter_threshold": zone.get("enter_threshold", 1),
+                        "exit_threshold": zone.get("exit_threshold", 1),
                     }
                 else:
                     # Absolute coordinates
@@ -272,9 +304,10 @@ class ZoneCounter:
                         "coordinate_type": "absolute",
                         "start_point": tuple(map(float, zone["start_point"])),
                         "end_point": tuple(map(float, zone["end_point"])),
-                        "direction": zone.get("direction", "one_way"),
-                        "side": zone.get("side", "above"),
-                        "threshold": zone.get("threshold", 0.5),
+                        "direction": direction,
+                        "side": zone.get("side", "above"),  # Legacy support
+                        "enter_threshold": zone.get("enter_threshold", 1),
+                        "exit_threshold": zone.get("exit_threshold", 1),
                     }
 
             else:
@@ -284,7 +317,9 @@ class ZoneCounter:
 
         return parsed_zones
 
-    def _get_track_centroid(self, detection: Dict[str, Any]) -> Optional[Tuple[float, float]]:
+    def _get_track_centroid(
+        self, detection: Dict[str, Any]
+    ) -> Optional[Tuple[float, float]]:
         """
         Get centroid of track from detection bbox.
 
@@ -295,7 +330,14 @@ class ZoneCounter:
             (x, y) centroid coordinates or None if bbox invalid
         """
         bbox = detection.get("bbox")
-        if not bbox or len(bbox) < 4:
+        if bbox is None:
+            return None
+
+        # Handle numpy array or list
+        if hasattr(bbox, "__len__"):
+            if len(bbox) < 4:
+                return None
+        else:
             return None
 
         # Handle both [x1, y1, x2, y2] and [x, y, w, h] formats
@@ -307,7 +349,9 @@ class ZoneCounter:
 
         return None
 
-    def _get_zone_points(self, zone: Dict[str, Any], frame_width: int, frame_height: int) -> List[Tuple[float, float]]:
+    def _get_zone_points(
+        self, zone: Dict[str, Any], frame_width: int, frame_height: int
+    ) -> List[Tuple[float, float]]:
         """
         Get absolute points for zone (convert percentage if needed).
 
@@ -333,7 +377,7 @@ class ZoneCounter:
     def _update_current_count(self, zone_id: str) -> None:
         """
         Recalculate current count for a zone based on actual track states.
-        
+
         Args:
             zone_id: Zone ID to update
         """
@@ -343,7 +387,9 @@ class ZoneCounter:
                 current += 1
         self.zone_counts[zone_id]["current"] = current
 
-    def _get_line_points(self, zone: Dict[str, Any], frame_width: int, frame_height: int) -> Tuple[Tuple[float, float], Tuple[float, float]]:
+    def _get_line_points(
+        self, zone: Dict[str, Any], frame_width: int, frame_height: int
+    ) -> Tuple[Tuple[float, float], Tuple[float, float]]:
         """
         Get absolute line points for zone (convert percentage if needed).
 
@@ -361,11 +407,11 @@ class ZoneCounter:
             end_percent = zone.get("end_point_percent", (0, 0))
             start = (
                 start_percent[0] * frame_width / 100.0,
-                start_percent[1] * frame_height / 100.0
+                start_percent[1] * frame_height / 100.0,
             )
             end = (
                 end_percent[0] * frame_width / 100.0,
-                end_percent[1] * frame_height / 100.0
+                end_percent[1] * frame_height / 100.0,
             )
             return (start, end)
         else:
@@ -373,7 +419,11 @@ class ZoneCounter:
             return (zone.get("start_point"), zone.get("end_point"))
 
     def _check_zone_polygon(
-        self, point: Tuple[float, float], zone: Dict[str, Any], frame_width: int, frame_height: int
+        self,
+        point: Tuple[float, float],
+        zone: Dict[str, Any],
+        frame_width: int,
+        frame_height: int,
     ) -> bool:
         """
         Check if point is inside polygon zone.
@@ -397,9 +447,9 @@ class ZoneCounter:
         zone: Dict[str, Any],
         frame_width: int,
         frame_height: int,
-    ) -> bool:
+    ) -> Tuple[bool, Optional[str]]:
         """
-        Check if point crossed line zone.
+        Check if point crossed line zone and detect movement direction relative to line.
 
         Args:
             prev_point: Previous point (x, y)
@@ -409,18 +459,97 @@ class ZoneCounter:
             frame_height: Frame height (for percentage conversion)
 
         Returns:
-            True if line was crossed
+            Tuple of (crossed: bool, movement_direction: Optional[str])
+            - crossed: True if line was crossed
+            - movement_direction: "forward" if moving in same direction as line, "backward" if opposite, None if not crossed
         """
         start_point, end_point = self._get_line_points(zone, frame_width, frame_height)
-        return line_crossing(
-            prev_point,
-            curr_point,
-            start_point,
-            end_point,
-            zone["side"],
-        )
 
-    def update(self, detections: List[Dict[str, Any]], frame: np.ndarray, frame_num: int = 0) -> Dict[str, Any]:
+        # Convert to numpy for easier computation
+        prev = np.array(prev_point)
+        curr = np.array(curr_point)
+        line_s = np.array(start_point)
+        line_e = np.array(end_point)
+
+        # Vector from line start to end (line direction)
+        line_vec = line_e - line_s
+        line_length_sq = np.dot(line_vec, line_vec)
+
+        # Handle degenerate case (zero-length line)
+        if line_length_sq < 1e-6:
+            return (False, None)
+
+        # Vector of person movement
+        movement_vec = curr - prev
+
+        # Vector from line start to previous and current points
+        prev_vec = prev - line_s
+        curr_vec = curr - line_s
+
+        # Cross product to determine which side of line (2D cross product = scalar)
+        prev_cross = float(np.cross(line_vec, prev_vec))
+        curr_cross = float(np.cross(line_vec, curr_vec))
+
+        # Check if crossing occurred (sign change)
+        crossing_detected = False
+        movement_direction = None
+
+        if abs(prev_cross) < 1e-6 or abs(curr_cross) < 1e-6:
+            # One point is collinear with line - check if it's crossing the segment
+            # Project points onto line to check if crossing segment
+            t_prev = (
+                np.dot(prev_vec, line_vec) / line_length_sq if line_length_sq > 0 else 0
+            )
+            t_curr = (
+                np.dot(curr_vec, line_vec) / line_length_sq if line_length_sq > 0 else 0
+            )
+
+            # Check if crossing segment boundaries (0 <= t <= 1)
+            if (t_prev < 0 and 0 <= t_curr <= 1) or (t_prev > 1 and 0 <= t_curr <= 1):
+                crossing_detected = True
+            elif (0 <= t_prev <= 1 and t_curr < 0) or (0 <= t_prev <= 1 and t_curr > 1):
+                crossing_detected = True
+
+            if crossing_detected:
+                # Determine movement direction relative to line direction
+                # Dot product of movement_vec and line_vec
+                dot_product = np.dot(movement_vec, line_vec)
+                movement_direction = "forward" if dot_product > 0 else "backward"
+
+        elif prev_cross * curr_cross < 0:
+            # Sign change - crossing detected
+            # Check if crossing point is within line segment
+            # Parameter t for intersection point on line
+            t = prev_cross / (prev_cross - curr_cross)
+
+            if 0 <= t <= 1:
+                crossing_detected = True
+                # Determine movement direction relative to line direction
+                # Use dot product of movement vector and line vector
+                dot_product = np.dot(movement_vec, line_vec)
+                movement_direction = "forward" if dot_product > 0 else "backward"
+
+        if not crossing_detected:
+            # No crossing - use legacy behavior for backward compatibility
+            if "direction" in zone and zone.get("direction") not in ["one_way", None]:
+                # New direction-based mode: return False with no direction
+                return (False, None)
+            else:
+                # Legacy mode: use side parameter
+                crossed = line_crossing(
+                    prev_point,
+                    curr_point,
+                    start_point,
+                    end_point,
+                    zone.get("side", "above"),
+                )
+                return (crossed, None)
+
+        return (True, movement_direction)
+
+    def update(
+        self, detections: List[Dict[str, Any]], frame: np.ndarray, frame_num: int = 0
+    ) -> Dict[str, Any]:
         """
         Update counter with new detections.
 
@@ -434,7 +563,7 @@ class ZoneCounter:
         """
         # Store frame number for matching logic
         self._frame_num = frame_num
-        
+
         # Update frame size for percentage-based zones
         if frame is not None and len(frame.shape) >= 2:
             frame_height, frame_width = frame.shape[:2]
@@ -442,10 +571,10 @@ class ZoneCounter:
         else:
             frame_width = self._frame_size[0] if self._frame_size else 1920
             frame_height = self._frame_size[1] if self._frame_size else 1080
-        
+
         current_track_ids = set()
         events = []
-        
+
         # First, build current_track_ids set
         for detection in detections:
             track_id = detection.get("track_id")
@@ -456,59 +585,85 @@ class ZoneCounter:
         stale_tracks = set(self.track_positions.keys()) - current_track_ids
         for stale_track_id in stale_tracks:
             # Store disappeared track info for position matching
-            stale_centroid = self.track_positions.get(stale_track_id, {}).get("centroid")
+            stale_centroid = self.track_positions.get(stale_track_id, {}).get(
+                "centroid"
+            )
             if stale_centroid:
+                # Store last_movement for line zones
+                zone_states_with_movement = {}
+                for zone_id in self.track_zone_state.get(stale_track_id, {}):
+                    zone_states_with_movement[zone_id] = self.track_zone_state.get(
+                        stale_track_id, {}
+                    ).get(zone_id)
+                    # Also store last_movement if exists
+                    last_mov_key = f"{zone_id}_last_movement"
+                    if last_mov_key in self.track_zone_state.get(stale_track_id, {}):
+                        zone_states_with_movement[
+                            last_mov_key
+                        ] = self.track_zone_state.get(stale_track_id, {}).get(
+                            last_mov_key
+                        )
+
                 self.disappeared_tracks[stale_track_id] = {
                     "position": stale_centroid,
-                    "frame": frame_num if hasattr(self, '_frame_num') else 0,
-                    "zone_states": self.track_zone_state.get(stale_track_id, {}).copy(),
-                    "zone_counted": self.track_zone_counted.get(stale_track_id, {}).copy(),
-                    "zone_frame_count": self.track_zone_frame_count.get(stale_track_id, {}).copy(),
+                    "frame": frame_num if hasattr(self, "_frame_num") else 0,
+                    "zone_states": zone_states_with_movement,
+                    "zone_counted": self.track_zone_counted.get(
+                        stale_track_id, {}
+                    ).copy(),
+                    "zone_frame_count": self.track_zone_frame_count.get(
+                        stale_track_id, {}
+                    ).copy(),
                 }
                 logger.debug(
                     f"Track {stale_track_id} disappeared at {stale_centroid}, stored for matching"
                 )
-        
+
         # Try to match new tracks with disappeared tracks by position
         # Do this BEFORE processing detections to transfer state early
         matched_stale_ids = set()
-        current_frame = frame_num if hasattr(self, '_frame_num') else 0
-        
+        current_frame = frame_num if hasattr(self, "_frame_num") else 0
+
         for detection in detections:
             new_track_id = detection.get("track_id")
             if new_track_id is None:
                 continue
-            
+
             # Check if this is a newly appearing track (not in existing positions)
             is_new_track = new_track_id not in self.track_positions
-            
+
             new_centroid = self._get_track_centroid(detection)
             if new_centroid is None:
                 continue
-            
+
             # Find closest disappeared track within threshold
             best_match = None
-            best_distance = float('inf')
-            
+            best_distance = float("inf")
+
             for stale_track_id, stale_info in list(self.disappeared_tracks.items()):
                 if stale_track_id in matched_stale_ids:
                     continue  # Already matched to another track
-                    
+
                 stale_pos = stale_info["position"]
                 distance = np.sqrt(
-                    (new_centroid[0] - stale_pos[0]) ** 2 + 
-                    (new_centroid[1] - stale_pos[1]) ** 2
+                    (new_centroid[0] - stale_pos[0]) ** 2
+                    + (new_centroid[1] - stale_pos[1]) ** 2
                 )
-                
+
                 # Only match if:
                 # 1. Within distance threshold (configurable, default 100px)
                 # 2. Disappeared recently (within last 10 frames)
                 # 3. This is a new track (not already tracked in previous frames)
                 frame_diff = current_frame - stale_info["frame"]
-                if distance < self._position_match_threshold and distance < best_distance and frame_diff <= 10 and is_new_track:
+                if (
+                    distance < self._position_match_threshold
+                    and distance < best_distance
+                    and frame_diff <= 10
+                    and is_new_track
+                ):
                     best_match = stale_track_id
                     best_distance = distance
-            
+
             # If found match, transfer state to new track BEFORE processing
             if best_match is not None:
                 stale_info = self.disappeared_tracks[best_match]
@@ -516,7 +671,7 @@ class ZoneCounter:
                     f"Matched new track {new_track_id} with disappeared track {best_match} "
                     f"(distance: {best_distance:.1f}px, frame_diff: {current_frame - stale_info['frame']})"
                 )
-                
+
                 # Transfer zone states and flags to prevent duplicate counting
                 if new_track_id not in self.track_zone_state:
                     self.track_zone_state[new_track_id] = {}
@@ -524,14 +679,59 @@ class ZoneCounter:
                     self.track_zone_counted[new_track_id] = {}
                 if new_track_id not in self.track_zone_frame_count:
                     self.track_zone_frame_count[new_track_id] = {}
-                
-                for zone_id, zone_state in stale_info["zone_states"].items():
-                    self.track_zone_state[new_track_id][zone_id] = zone_state
-                    if zone_id in stale_info["zone_counted"]:
-                        self.track_zone_counted[new_track_id][zone_id] = stale_info["zone_counted"][zone_id]
-                    if zone_id in stale_info["zone_frame_count"]:
-                        self.track_zone_frame_count[new_track_id][zone_id] = stale_info["zone_frame_count"][zone_id]
-                
+
+                # Transfer all zone states including last_direction
+                for key, value in stale_info["zone_states"].items():
+                    self.track_zone_state[new_track_id][key] = value
+
+                # Transfer counted flags
+                for zone_id, counted in stale_info["zone_counted"].items():
+                    self.track_zone_counted[new_track_id][zone_id] = counted
+
+                # Transfer frame counts
+                for zone_id, frame_count in stale_info["zone_frame_count"].items():
+                    self.track_zone_frame_count[new_track_id][zone_id] = frame_count
+
+                # Also transfer previous position to avoid false crossing detection
+                # CRITICAL: Store stale position AND current position to properly handle crossing detection
+                if "position" in stale_info:
+                    if new_track_id not in self.track_positions:
+                        self.track_positions[new_track_id] = {}
+                    # Store stale position as previous position for next frame
+                    # This ensures continuity when checking crossing
+                    self.track_positions[new_track_id]["centroid"] = stale_info[
+                        "position"
+                    ]
+                    # Store current position separately to track movement
+                    self.track_positions[new_track_id]["matched_at"] = new_centroid
+                    # Mark this track as just matched - skip crossing check for N frames to stabilize
+                    if new_track_id not in self.track_zone_state:
+                        self.track_zone_state[new_track_id] = {}
+                    self.track_zone_state[new_track_id]["_just_matched"] = current_frame
+                    # Also store which side of line the track was on when it disappeared
+                    # This helps prevent false crossing detection
+                    for zone in self.zones:
+                        if zone.get("type") == "line":
+                            zone_id = zone["zone_id"]
+                            stale_pos = stale_info["position"]
+                            # Check which side of line the stale position was on
+                            start_point, end_point = self._get_line_points(
+                                zone, frame_width, frame_height
+                            )
+                            line_vec = np.array(end_point) - np.array(start_point)
+                            stale_vec = np.array(stale_pos) - np.array(start_point)
+                            stale_cross = float(np.cross(line_vec, stale_vec))
+                            stale_side = (
+                                "left"
+                                if stale_cross < 0
+                                else "right"
+                                if stale_cross > 0
+                                else "on"
+                            )
+                            self.track_zone_state[new_track_id][
+                                f"{zone_id}_matched_side"
+                            ] = stale_side
+
                 # Remove matched disappeared track
                 del self.disappeared_tracks[best_match]
                 matched_stale_ids.add(best_match)
@@ -547,7 +747,9 @@ class ZoneCounter:
 
             # Get previous position
             prev_centroid = self.track_positions.get(track_id, {}).get("centroid")
-            prev_centroid = prev_centroid or centroid  # Use current as prev if no history
+            prev_centroid = (
+                prev_centroid or centroid
+            )  # Use current as prev if no history
 
             # Check each zone
             for zone in self.zones:
@@ -555,27 +757,196 @@ class ZoneCounter:
                 zone_type = zone["type"]
 
                 # Get previous zone state (confirmed state, not raw)
-                prev_confirmed_in_zone = self.track_zone_state.get(track_id, {}).get(zone_id, False)
-                
+                prev_confirmed_in_zone = self.track_zone_state.get(track_id, {}).get(
+                    zone_id, False
+                )
+
                 # Initialize tracking structures
                 if track_id not in self.track_zone_frame_count:
                     self.track_zone_frame_count[track_id] = {}
                 if zone_id not in self.track_zone_frame_count[track_id]:
                     self.track_zone_frame_count[track_id][zone_id] = 0
-                    
+
                 if track_id not in self.track_zone_counted:
                     self.track_zone_counted[track_id] = {}
                 if zone_id not in self.track_zone_counted[track_id]:
-                    self.track_zone_counted[track_id][zone_id] = None  # None, "enter", or "exit"
+                    self.track_zone_counted[track_id][
+                        zone_id
+                    ] = None  # None, "enter", or "exit"
 
                 # Check current zone state (with frame size for percentage conversion)
                 if zone_type == "polygon":
-                    curr_in_zone = self._check_zone_polygon(centroid, zone, frame_width, frame_height)
+                    curr_in_zone = self._check_zone_polygon(
+                        centroid, zone, frame_width, frame_height
+                    )
+                    crossing_direction = None
                 elif zone_type == "line":
-                    curr_in_zone = self._check_zone_line(prev_centroid, centroid, zone, frame_width, frame_height)
+                    crossed, crossing_direction = self._check_zone_line(
+                        prev_centroid, centroid, zone, frame_width, frame_height
+                    )
+                    curr_in_zone = crossed
                 else:
                     curr_in_zone = False
+                    crossing_direction = None
 
+                # Handle line zones with direction-based counting
+                if zone_type == "line":
+                    direction_config = zone.get("direction", "one_way")
+
+                    # Check if using direction-based mode
+                    if direction_config not in ["one_way", None]:
+                        # Direction-based line crossing logic
+                        # movement_direction: "forward" = same direction as line (start->end), "backward" = opposite
+                        # Config direction defines which movement direction = IN
+
+                        # For left_to_right: line goes left->right, forward movement = left->right = IN
+                        # For right_to_left: line goes left->right, backward movement = right->left = IN
+                        # For top_to_bottom: line goes top->bottom, forward movement = top->bottom = IN
+                        # For bottom_to_top: line goes top->bottom, backward movement = bottom->top = IN
+
+                        expected_enter_movement = None
+                        expected_exit_movement = None
+
+                        if direction_config == "left_to_right":
+                            # Line goes from left to right, forward movement = IN
+                            expected_enter_movement = "forward"
+                            expected_exit_movement = "backward"
+                        elif direction_config == "right_to_left":
+                            # Line goes from left to right, backward movement = IN
+                            expected_enter_movement = "backward"
+                            expected_exit_movement = "forward"
+                        elif direction_config == "top_to_bottom":
+                            # Line goes from top to bottom, forward movement = IN
+                            expected_enter_movement = "forward"
+                            expected_exit_movement = "backward"
+                        elif direction_config == "bottom_to_top":
+                            # Line goes from top to bottom, backward movement = IN
+                            expected_enter_movement = "backward"
+                            expected_exit_movement = "forward"
+
+                        if expected_enter_movement is not None:
+                            # Direction-based mode
+                            last_counted = self.track_zone_counted[track_id][zone_id]
+                            last_movement_direction = self.track_zone_state.get(
+                                track_id, {}
+                            ).get(f"{zone_id}_last_movement")
+
+                            # Skip if track was just matched - wait for stable movement before counting
+                            just_matched_frame = self.track_zone_state.get(
+                                track_id, {}
+                            ).get("_just_matched")
+                            if just_matched_frame is not None:
+                                frames_since_match = frame_num - just_matched_frame
+                                # Skip crossing check for 2 frames after match to stabilize
+                                if frames_since_match < 2:
+                                    logger.debug(
+                                        f"Track {track_id} just matched {frames_since_match} frames ago, skipping crossing check"
+                                    )
+                                    # Clear flag after waiting period
+                                    if frames_since_match >= 1:
+                                        self.track_zone_state[track_id][
+                                            "_just_matched"
+                                        ] = None
+                                    continue
+                                else:
+                                    # Clear flag after waiting period
+                                    self.track_zone_state[track_id][
+                                        "_just_matched"
+                                    ] = None
+
+                            # Only process if crossing detected AND movement direction changed
+                            # This prevents duplicate events when track is matched/reappears
+                            if (
+                                crossing_direction is not None
+                                and crossing_direction != last_movement_direction
+                            ):
+                                # Additional check: ensure we have valid previous position and actual movement
+                                # If prev_centroid is same as current (track just matched), skip to avoid false positive
+                                if (
+                                    prev_centroid is not None
+                                    and prev_centroid != centroid
+                                ):
+                                    # Additional check: ensure minimum movement distance to avoid noise
+                                    movement_distance = np.sqrt(
+                                        (centroid[0] - prev_centroid[0]) ** 2
+                                        + (centroid[1] - prev_centroid[1]) ** 2
+                                    )
+                                    min_movement_threshold = 5.0  # pixels - minimum movement to count crossing
+
+                                    if movement_distance >= min_movement_threshold:
+                                        if (
+                                            crossing_direction
+                                            == expected_enter_movement
+                                        ):
+                                            # Enter event (moving in IN direction)
+                                            if last_counted != "enter":
+                                                self.zone_counts[zone_id]["enter"] += 1
+                                                self.zone_counts[zone_id]["total"] += 1
+                                                self.track_zone_counted[track_id][
+                                                    zone_id
+                                                ] = "enter"
+                                                if (
+                                                    track_id
+                                                    not in self.track_zone_state
+                                                ):
+                                                    self.track_zone_state[track_id] = {}
+                                                self.track_zone_state[track_id][
+                                                    f"{zone_id}_last_movement"
+                                                ] = crossing_direction
+                                                events.append(
+                                                    {
+                                                        "type": "enter",
+                                                        "zone_id": zone_id,
+                                                        "zone_name": zone["name"],
+                                                        "track_id": track_id,
+                                                    }
+                                                )
+                                                logger.info(
+                                                    f"Track {track_id} entered zone {zone_id} ({zone['name']}) - movement: {crossing_direction}"
+                                                )
+                                        elif (
+                                            crossing_direction == expected_exit_movement
+                                        ):
+                                            # Exit event (moving in OUT direction)
+                                            if last_counted != "exit":
+                                                self.zone_counts[zone_id]["exit"] += 1
+                                                self.zone_counts[zone_id]["total"] -= 1
+                                                self.track_zone_counted[track_id][
+                                                    zone_id
+                                                ] = "exit"
+                                                if (
+                                                    track_id
+                                                    not in self.track_zone_state
+                                                ):
+                                                    self.track_zone_state[track_id] = {}
+                                                self.track_zone_state[track_id][
+                                                    f"{zone_id}_last_movement"
+                                                ] = crossing_direction
+                                                events.append(
+                                                    {
+                                                        "type": "exit",
+                                                        "zone_id": zone_id,
+                                                        "zone_name": zone["name"],
+                                                        "track_id": track_id,
+                                                    }
+                                                )
+                                                logger.info(
+                                                    f"Track {track_id} exited zone {zone_id} ({zone['name']}) - movement: {crossing_direction}"
+                                                )
+                                    else:
+                                        logger.debug(
+                                            f"Track {track_id} movement too small ({movement_distance:.1f}px < {min_movement_threshold}px), skipping"
+                                        )
+                                else:
+                                    # Track just matched/reappeared at same position - don't count as crossing
+                                    logger.debug(
+                                        f"Track {track_id} matched/reappeared at same position, skipping crossing check"
+                                    )
+
+                            # Continue to next zone (position will be updated at end of detection loop)
+                            continue  # Skip polygon/legacy logic below
+
+                # Polygon zone logic (or legacy line zone logic)
                 # Flickering protection: Use threshold to prevent rapid state changes
                 enter_threshold = zone.get("enter_threshold", 1)  # Default: 1 frame
                 exit_threshold = zone.get("exit_threshold", 1)  # Default: 1 frame
@@ -602,14 +973,20 @@ class ZoneCounter:
 
                 # Only consider state change if threshold is met
                 confirmed_curr_in_zone = (
-                    curr_in_zone and self.track_zone_frame_count[track_id][zone_id] >= enter_threshold
+                    curr_in_zone
+                    and self.track_zone_frame_count[track_id][zone_id]
+                    >= enter_threshold
                 )
                 # For exit, we need to check that we've been outside long enough
                 # AND that we were previously inside (confirmed)
-                outside_frames = abs(self.track_zone_frame_count[track_id][zone_id]) if self.track_zone_frame_count[track_id][zone_id] < 0 else 0
+                outside_frames = (
+                    abs(self.track_zone_frame_count[track_id][zone_id])
+                    if self.track_zone_frame_count[track_id][zone_id] < 0
+                    else 0
+                )
                 confirmed_exit = (
-                    not curr_in_zone 
-                    and prev_confirmed_in_zone 
+                    not curr_in_zone
+                    and prev_confirmed_in_zone
                     and outside_frames >= exit_threshold
                 )
 
@@ -671,16 +1048,18 @@ class ZoneCounter:
                 # Update zone state (use confirmed state, not raw)
                 if track_id not in self.track_zone_state:
                     self.track_zone_state[track_id] = {}
-                
+
                 # Only update state if we haven't just counted an exit (state already updated above)
-                if not (prev_confirmed_in_zone and confirmed_exit and last_counted != "exit"):
+                if not (
+                    prev_confirmed_in_zone and confirmed_exit and last_counted != "exit"
+                ):
                     # Update state to confirmed state (after threshold check)
                     self.track_zone_state[track_id][zone_id] = confirmed_curr_in_zone
-                
+
                 # Reset counted flag when crossing boundary in opposite direction
                 # This allows counting again when track crosses boundary the other way
                 current_counted = self.track_zone_counted[track_id][zone_id]
-                if confirmed_curr_in_zone and prev_confirmed_in_zone == False:
+                if confirmed_curr_in_zone and prev_confirmed_in_zone is False:
                     # Just confirmed entered - reset exit flag to allow new cycles
                     if current_counted == "exit":
                         self.track_zone_counted[track_id][zone_id] = None
@@ -693,7 +1072,7 @@ class ZoneCounter:
         # Recalculate current counts for all zones from actual states
         for zone in self.zones:
             self._update_current_count(zone["zone_id"])
-        
+
         # Only count exit for unmatched stale tracks (that haven't been matched to new tracks)
         for stale_track_id in stale_tracks:
             # Skip if this track was matched to a new track
@@ -702,7 +1081,7 @@ class ZoneCounter:
             # Skip if already removed from disappeared_tracks
             if stale_track_id not in self.disappeared_tracks:
                 continue
-                
+
             for zone in self.zones:
                 zone_id = zone["zone_id"]
                 if self.track_zone_state.get(stale_track_id, {}).get(zone_id, False):
@@ -710,7 +1089,9 @@ class ZoneCounter:
                     self.track_zone_state[stale_track_id][zone_id] = False
                     self.zone_counts[zone_id]["exit"] += 1
                     self.zone_counts[zone_id]["total"] -= 1
-                    self.zone_counts[zone_id]["current"] = max(0, self.zone_counts[zone_id]["current"] - 1)
+                    self.zone_counts[zone_id]["current"] = max(
+                        0, self.zone_counts[zone_id]["current"] - 1
+                    )
                     events.append(
                         {
                             "type": "exit",
@@ -723,12 +1104,12 @@ class ZoneCounter:
                     logger.debug(
                         f"Track {stale_track_id} exited zone {zone_id} ({zone['name']}) - track disappeared (unmatched)"
                     )
-            
+
             # Clean up unmatched disappeared track after processing
             del self.disappeared_tracks[stale_track_id]
-        
+
         # Clean up old disappeared tracks (older than 30 frames)
-        current_frame = frame_num if hasattr(self, '_frame_num') else 0
+        current_frame = frame_num if hasattr(self, "_frame_num") else 0
         for stale_track_id, stale_info in list(self.disappeared_tracks.items()):
             frame_diff = current_frame - stale_info["frame"]
             if frame_diff > 30:
@@ -759,7 +1140,12 @@ class ZoneCounter:
         if zone_id is None:
             # Reset all zones
             for z_id in self.zone_counts:
-                self.zone_counts[z_id] = {"enter": 0, "exit": 0, "total": 0, "current": 0}
+                self.zone_counts[z_id] = {
+                    "enter": 0,
+                    "exit": 0,
+                    "total": 0,
+                    "current": 0,
+                }
             self.track_positions.clear()
             self.track_zone_state.clear()
             self.track_zone_frame_count.clear()
@@ -768,7 +1154,12 @@ class ZoneCounter:
         else:
             # Reset specific zone
             if zone_id in self.zone_counts:
-                self.zone_counts[zone_id] = {"enter": 0, "exit": 0, "total": 0, "current": 0}
+                self.zone_counts[zone_id] = {
+                    "enter": 0,
+                    "exit": 0,
+                    "total": 0,
+                    "current": 0,
+                }
                 # Clear zone state for all tracks
                 for track_id in self.track_zone_state:
                     if zone_id in self.track_zone_state[track_id]:
@@ -794,7 +1185,7 @@ class ZoneCounter:
             Frame with zones and counts drawn
         """
         frame = frame.copy()
-        
+
         # Get frame size for percentage conversion
         if frame is not None and len(frame.shape) >= 2:
             frame_height, frame_width = frame.shape[:2]
@@ -822,7 +1213,9 @@ class ZoneCounter:
                 for idx, point in enumerate(points):
                     x, y = int(point[0]), int(point[1])
                     # Draw circle at point
-                    cv2.circle(frame, (x, y), 8, (255, 255, 0), -1)  # Yellow filled circle
+                    cv2.circle(
+                        frame, (x, y), 8, (255, 255, 0), -1
+                    )  # Yellow filled circle
                     cv2.circle(frame, (x, y), 8, (0, 0, 0), 2)  # Black border
                     # Draw point number
                     text = str(idx)
@@ -871,7 +1264,9 @@ class ZoneCounter:
 
             elif zone["type"] == "line":
                 # Get absolute points (convert percentage if needed)
-                start_point, end_point = self._get_line_points(zone, frame_width, frame_height)
+                start_point, end_point = self._get_line_points(
+                    zone, frame_width, frame_height
+                )
                 start = tuple(map(int, start_point))
                 end = tuple(map(int, end_point))
                 cv2.line(frame, start, end, (255, 0, 0), 2)
@@ -935,4 +1330,3 @@ class ZoneCounter:
                 )
 
         return frame
-

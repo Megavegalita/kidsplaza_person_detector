@@ -9,7 +9,8 @@ person identity management.
 
 from src.modules.counter.daily_person_counter import DailyPersonCounter
 from src.modules.counter.person_identity_manager import PersonIdentityManager
-from src.modules.counter.zone_counter import ZoneCounter, point_in_polygon, line_crossing
+from src.modules.counter.zone_counter import (ZoneCounter, line_crossing,
+                                              point_in_polygon)
 
 __all__ = [
     "ZoneCounter",
@@ -18,4 +19,3 @@ __all__ = [
     "point_in_polygon",
     "line_crossing",
 ]
-

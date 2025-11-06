@@ -57,6 +57,7 @@
                 "Point 3: Bottom-left corner (0% width, 100% height)"
               ],
               "direction": "bidirectional",
+              "active": false,
               "comment": "Left half of screen using percentage (dynamic for any resolution). Points are numbered 0-3 on display."
             }
           ]
@@ -110,6 +111,7 @@
                 "Point 3: Bottom-left corner (0% width, 100% height)"
               ],
               "direction": "bidirectional",
+              "active": false,
               "comment": "Left half of screen using percentage (dynamic for any resolution). Points are numbered 0-3 on display."
             }
           ]
@@ -169,7 +171,8 @@
                 "Point 3: Bottom-left corner (0% width, 100% height)"
               ],
               "direction": "bidirectional",
-              "comment": "Bottom half of screen using percentage (dynamic for any resolution). Points are numbered 0-3 on display."
+              "active": false,
+              "comment": "Bottom half of screen using percentage (dynamic for any resolution). Points are numbered 0-3 on display. Currently inactive."
             }
           ]
         }
@@ -213,27 +216,54 @@
         "staff_detection": {
           "enabled": true,
           "model_path": "models/kidsplaza/best.pt",
-          "conf_threshold": 0.4
+          "conf_threshold": 0.6
         },
         "counter": {
           "enabled": true,
           "zones": [
             {
               "zone_id": "zone_1",
-              "name": "Active Zone",
+              "name": "Left Bottom Zone",
               "type": "polygon",
               "coordinate_type": "percentage",
               "points": [[0, 30], [50, 30], [50, 100], [0, 100]],
               "enter_threshold": 2,
               "exit_threshold": 2,
               "points_labels": [
-                "Point 0: Top-left corner (0% width, 50% height)",
-                "Point 1: Top-right corner (100% width, 50% height)",
-                "Point 2: Bottom-right corner (100% width, 100% height)",
+                "Point 0: Top-left corner (0% width, 30% height)",
+                "Point 1: Top-right corner (50% width, 30% height)",
+                "Point 2: Bottom-right corner (50% width, 100% height)",
                 "Point 3: Bottom-left corner (0% width, 100% height)"
               ],
               "direction": "bidirectional",
-              "comment": "Bottom half of screen using percentage (dynamic for any resolution). Points are numbered 0-3 on display."
+              "active": false,
+              "comment": "Left bottom zone - inactive for testing"
+            },
+            {
+              "zone_id": "line_entrance",
+              "name": "Entrance Line",
+              "type": "line",
+              "coordinate_type": "percentage",
+              "start_point": [10, 50],
+              "end_point": [50, 50],
+              "direction": "top_to_bottom",
+              "enter_threshold": 1,
+              "exit_threshold": 1,
+              "active": true,
+              "comment": "Horizontal line at 50% height. Top to bottom crossing = ENTER, bottom to top = EXIT"
+            },
+            {
+              "zone_id": "line_exit",
+              "name": "Exit Line",
+              "type": "line",
+              "coordinate_type": "percentage",
+              "start_point": [10, 70],
+              "end_point": [90, 70],
+              "direction": "bottom_to_top",
+              "enter_threshold": 1,
+              "exit_threshold": 1,
+              "active": false,
+              "comment": "Horizontal line at 70% height. Bottom to top crossing = ENTER, top to bottom = EXIT"
             }
           ]
         }

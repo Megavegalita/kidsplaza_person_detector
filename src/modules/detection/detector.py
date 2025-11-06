@@ -81,7 +81,9 @@ class Detector:
 
         try:
             # Run detection on GPU/MPS with confidence threshold
-            detections = self.model_loader.detect_persons(frame, conf=self.conf_threshold)
+            detections = self.model_loader.detect_persons(
+                frame, conf=self.conf_threshold
+            )
 
             inference_time = time.time() - start_time
 

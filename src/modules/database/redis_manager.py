@@ -19,6 +19,7 @@ class RedisManager:
         self.url = url
         self.default_ttl_seconds = default_ttl_seconds
         from typing import Any as _Any
+
         self._client: Optional[_Any] = None
         self._connect()
 

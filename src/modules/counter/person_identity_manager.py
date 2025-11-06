@@ -10,7 +10,7 @@ import hashlib
 import json
 import logging
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 class PersonIdentityManager:
     """
     Manages unique person identities across channels using Re-ID embeddings.
-    
+
     Uses Redis to store person_id -> embedding mappings and track_id -> person_id mappings.
     Matches new tracks to existing persons based on cosine similarity of embeddings.
     """
@@ -43,13 +43,15 @@ class PersonIdentityManager:
         """
         self.similarity_threshold = float(similarity_threshold)
         self.redis_ttl_seconds = int(redis_ttl_seconds)
-        
+
         # Use ReIDCache for Redis connection
         self.cache: Optional[ReIDCache] = None
         try:
             self.cache = ReIDCache(url=redis_url, ttl_seconds=redis_ttl_seconds)
             if self.cache._client is None:
-                logger.warning("PersonIdentityManager: Redis not available, using in-memory mode")
+                logger.warning(
+                    "PersonIdentityManager: Redis not available, using in-memory mode"
+                )
                 self.cache = None
         except Exception as e:
             logger.warning("PersonIdentityManager: Failed to connect to Redis: %s", e)
@@ -71,12 +73,14 @@ class PersonIdentityManager:
     def _key_person_counter(self, person_id: str, zone_id: str, date_str: str) -> str:
         """Generate Redis key for daily person counter (per zone)."""
         return f"person:counter:{person_id}:{zone_id}:{date_str}"
-    
+
     def _key_person_counter_global(self, person_id: str, date_str: str) -> str:
         """Generate Redis key for global daily person counter (across all zones/channels)."""
         return f"person:counter:global:{person_id}:{date_str}"
 
-    def _cosine_similarity(self, a: np.ndarray, b: np.ndarray, eps: float = 1e-9) -> float:
+    def _cosine_similarity(
+        self, a: np.ndarray, b: np.ndarray, eps: float = 1e-9
+    ) -> float:
         """Calculate cosine similarity between two vectors."""
         norm_a = float(np.linalg.norm(a))
         norm_b = float(np.linalg.norm(b))
@@ -85,7 +89,9 @@ class PersonIdentityManager:
         dot_product = float(np.dot(a, b))
         return dot_product / (norm_a * norm_b)
 
-    def _generate_person_id(self, channel_id: int, track_id: int, timestamp: float) -> str:
+    def _generate_person_id(
+        self, channel_id: int, track_id: int, timestamp: float
+    ) -> str:
         """Generate unique person_id."""
         # Format: P{channel_id}_{timestamp_hash}_{counter}
         timestamp_str = str(int(timestamp))
@@ -138,13 +144,13 @@ class PersonIdentityManager:
         # Create new person_id
         timestamp = datetime.now().timestamp()
         new_person_id = self._generate_person_id(channel_id, track_id, timestamp)
-        
+
         # Store person embedding
         self._set_person_embedding(new_person_id, embedding)
-        
+
         # Assign to track
         self._set_track_person_id(channel_id, track_id, new_person_id)
-        
+
         logger.info(
             "Created new person %s for track %d (channel %d)",
             new_person_id,
@@ -156,7 +162,7 @@ class PersonIdentityManager:
     def _get_track_person_id(self, channel_id: int, track_id: int) -> Optional[str]:
         """Get person_id for a track_id."""
         key = self._key_track_mapping(channel_id, track_id)
-        
+
         if self.cache and self.cache._client:
             try:
                 raw = self.cache._client.get(key)
@@ -164,7 +170,7 @@ class PersonIdentityManager:
                     return raw.decode("utf-8")
             except Exception as e:
                 logger.debug("Redis get failed for track mapping: %s", e)
-        
+
         # In-memory fallback
         in_mem_key = f"{channel_id}:{track_id}"
         return self._in_memory_tracks.get(in_mem_key)
@@ -174,13 +180,13 @@ class PersonIdentityManager:
     ) -> None:
         """Store track_id -> person_id mapping."""
         key = self._key_track_mapping(channel_id, track_id)
-        
+
         if self.cache and self.cache._client:
             try:
                 self.cache._client.setex(key, self.redis_ttl_seconds, person_id)
             except Exception as e:
                 logger.debug("Redis set failed for track mapping: %s", e)
-        
+
         # In-memory fallback
         in_mem_key = f"{channel_id}:{track_id}"
         self._in_memory_tracks[in_mem_key] = person_id
@@ -188,7 +194,7 @@ class PersonIdentityManager:
     def _set_person_embedding(self, person_id: str, embedding: np.ndarray) -> None:
         """Store person_id -> embedding mapping."""
         key = self._key_person(person_id)
-        
+
         if self.cache and self.cache._client:
             try:
                 payload = {
@@ -201,7 +207,7 @@ class PersonIdentityManager:
                 )
             except Exception as e:
                 logger.debug("Redis set failed for person embedding: %s", e)
-        
+
         # In-memory fallback
         self._in_memory_persons[person_id] = embedding.copy()
 
@@ -216,7 +222,7 @@ class PersonIdentityManager:
                     return np.array(data["embedding"], dtype=np.float32)
             except Exception as e:
                 logger.debug("Redis get failed for person embedding: %s", e)
-        
+
         # In-memory fallback
         return self._in_memory_persons.get(person_id)
 
@@ -240,21 +246,27 @@ class PersonIdentityManager:
                 pattern = "person:identity:*"
                 cursor = 0
                 while True:
-                    cursor, keys = self.cache._client.scan(cursor, match=pattern, count=100)
+                    cursor, keys = self.cache._client.scan(
+                        cursor, match=pattern, count=100
+                    )
                     for key in keys:
                         try:
                             raw = self.cache._client.get(key)
                             if raw:
                                 data = json.loads(raw)
-                                existing_emb = np.array(data["embedding"], dtype=np.float32)
-                                similarity = self._cosine_similarity(embedding, existing_emb)
-                                
+                                existing_emb = np.array(
+                                    data["embedding"], dtype=np.float32
+                                )
+                                similarity = self._cosine_similarity(
+                                    embedding, existing_emb
+                                )
+
                                 if similarity > best_similarity:
                                     best_similarity = similarity
                                     best_match = data["person_id"]
                         except Exception:
                             continue
-                    
+
                     if cursor == 0:
                         break
             except Exception as e:
@@ -283,7 +295,7 @@ class PersonIdentityManager:
     ) -> Tuple[bool, Dict[str, int]]:
         """
         Check if person can be counted for today (once per day per event type, globally across all channels).
-        
+
         Uses global counter to ensure one person = one enter/exit count per day regardless of channel/zone.
 
         Args:
@@ -297,7 +309,7 @@ class PersonIdentityManager:
         """
         date_str = self._get_today_date()
         global_key = self._key_person_counter_global(person_id, date_str)
-        
+
         global_counts = {"enter": 0, "exit": 0}
 
         if self.cache and self.cache._client:
@@ -306,7 +318,7 @@ class PersonIdentityManager:
                 raw = self.cache._client.get(global_key)
                 if raw:
                     global_counts = json.loads(raw)
-                
+
                 # Check if already counted this event type today globally (only once per day across all channels)
                 if global_counts.get(event_type, 0) >= 1:
                     logger.debug(
@@ -317,16 +329,20 @@ class PersonIdentityManager:
                         global_counts["exit"],
                     )
                     return (False, global_counts.copy())
-                
+
                 # Increment global count (mark as counted globally)
                 global_counts[event_type] = 1
-                
+
                 # Store with TTL until end of day
-                ttl_until_midnight = (86400 - int(datetime.now().timestamp() % 86400))
-                if ttl_until_midnight < 3600:  # If less than 1 hour to midnight, add buffer
+                ttl_until_midnight = 86400 - int(datetime.now().timestamp() % 86400)
+                if (
+                    ttl_until_midnight < 3600
+                ):  # If less than 1 hour to midnight, add buffer
                     ttl_until_midnight = 86400  # Full day buffer
-                self.cache._client.setex(global_key, ttl_until_midnight, json.dumps(global_counts))
-                
+                self.cache._client.setex(
+                    global_key, ttl_until_midnight, json.dumps(global_counts)
+                )
+
                 logger.info(
                     "Global daily count updated: person %s %s (global totals: enter=%d, exit=%d)",
                     person_id,
@@ -344,31 +360,31 @@ class PersonIdentityManager:
             self._in_memory_counters_global = {}
         if in_mem_key_global not in self._in_memory_counters_global:
             self._in_memory_counters_global[in_mem_key_global] = {"enter": 0, "exit": 0}
-        
+
         global_counts = self._in_memory_counters_global[in_mem_key_global].copy()
-        
+
         # Check and update
         if global_counts.get(event_type, 0) >= 1:
             return (False, global_counts)
-        
+
         global_counts[event_type] = 1
         self._in_memory_counters_global[in_mem_key_global] = global_counts
-        
+
         return (True, global_counts.copy())
-    
+
     def get_global_daily_counts(self, person_id: str) -> Dict[str, int]:
         """
         Get global daily counts for a person (across all channels/zones).
-        
+
         Args:
             person_id: Person ID.
-            
+
         Returns:
             Dict with {"enter": count, "exit": count} globally for today.
         """
         date_str = self._get_today_date()
         global_key = self._key_person_counter_global(person_id, date_str)
-        
+
         if self.cache and self.cache._client:
             try:
                 raw = self.cache._client.get(global_key)
@@ -376,31 +392,35 @@ class PersonIdentityManager:
                     return json.loads(raw)
             except Exception as e:
                 logger.debug("Failed to get global counts: %s", e)
-        
+
         # In-memory fallback
         in_mem_key = f"global:{person_id}:{date_str}"
         if hasattr(self, "_in_memory_counters_global"):
-            return self._in_memory_counters_global.get(in_mem_key, {"enter": 0, "exit": 0})
-        
+            return self._in_memory_counters_global.get(
+                in_mem_key, {"enter": 0, "exit": 0}
+            )
+
         return {"enter": 0, "exit": 0}
 
     def get_all_global_daily_counts(self) -> Dict[str, Dict[str, int]]:
         """
         Get all global daily counts for all persons (across all channels).
-        
+
         Returns:
             Dict mapping person_id to {"enter": count, "exit": count}.
         """
         all_counts: Dict[str, Dict[str, int]] = {}
         date_str = self._get_today_date()
-        
+
         if self.cache and self.cache._client:
             try:
                 # Scan for all global counter keys for today
                 pattern = f"person:counter:global:*:{date_str}"
                 cursor = 0
                 while True:
-                    cursor, keys = self.cache._client.scan(cursor, match=pattern, count=100)
+                    cursor, keys = self.cache._client.scan(
+                        cursor, match=pattern, count=100
+                    )
                     for key in keys:
                         try:
                             raw = self.cache._client.get(key)
@@ -413,14 +433,14 @@ class PersonIdentityManager:
                                     all_counts[person_id] = counts
                         except Exception:
                             continue
-                    
+
                     if cursor == 0:
                         break
             except Exception as e:
                 logger.debug("Failed to scan global counters: %s", e)
-        
+
         return all_counts
-    
+
     def reset_daily_counts(self) -> None:
         """Reset all daily counters (call at midnight)."""
         # Redis TTL will handle expiration automatically
@@ -429,4 +449,3 @@ class PersonIdentityManager:
             self._in_memory_counters = {}
         if hasattr(self, "_in_memory_counters_global"):
             self._in_memory_counters_global = {}
-

@@ -26,7 +26,7 @@ class StaffClassifierError(Exception):
 class StaffClassifier:
     """
     Classifies person crops as staff (kidsplaza) or customer.
-    
+
     Uses YOLOv8 model with 2 classes:
     - Class 0: customer
     - Class 1: kidsplaza (staff)
@@ -45,7 +45,7 @@ class StaffClassifier:
             model_path: Path to YOLOv8 staff detection model.
             device: Device to use ('mps', 'cpu', or None for auto-select).
             conf_threshold: Confidence threshold for classification.
-            
+
         Raises:
             StaffClassifierError: If model loading fails.
         """
@@ -83,9 +83,7 @@ class StaffClassifier:
                     f"Staff model not found at {self.model_path}"
                 )
 
-            logger.info(
-                "Loading staff detection model from %s", str(self.model_path)
-            )
+            logger.info("Loading staff detection model from %s", str(self.model_path))
             self.model = YOLO(str(self.model_path))
 
             # Set model to evaluation mode
@@ -110,9 +108,7 @@ class StaffClassifier:
 
         except Exception as e:
             logger.error("Failed to load staff classifier: %s", e)
-            raise StaffClassifierError(
-                f"Staff classifier loading failed: {e}"
-            ) from e
+            raise StaffClassifierError(f"Staff classifier loading failed: {e}") from e
 
     def classify(
         self,
@@ -147,9 +143,7 @@ class StaffClassifier:
 
             if len(results) == 0 or results[0].boxes is None:
                 # No detection, default to customer
-                logger.debug(
-                    "No staff detection found, defaulting to customer"
-                )
+                logger.debug("No staff detection found, defaulting to customer")
                 return "customer", 0.0
 
             result = results[0]
@@ -157,9 +151,7 @@ class StaffClassifier:
 
             # Check if boxes is empty
             if len(boxes) == 0:
-                logger.debug(
-                    "No detections in staff model, defaulting to customer"
-                )
+                logger.debug("No detections in staff model, defaulting to customer")
                 return "customer", 0.0
 
             # Get detection with highest confidence
@@ -255,4 +247,3 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"❌ Error: {e}")
         sys.exit(1)
-

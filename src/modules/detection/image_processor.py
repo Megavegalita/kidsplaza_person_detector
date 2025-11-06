@@ -145,13 +145,13 @@ class ImageProcessor:
             if show_labels:
                 # Build label preferring person_id (Re-ID) when available, else track_id
                 class_name = detection.get("class_name", "person")
-                
+
                 # Add person type label
                 if person_type == "staff":
                     class_name = "Staff"
                 elif person_type == "customer":
                     class_name = "Customer"
-                
+
                 label = f"{class_name}: {conf:.2f}"
                 person_id = detection.get("person_id") or detection.get("_person_id")
                 if person_id:

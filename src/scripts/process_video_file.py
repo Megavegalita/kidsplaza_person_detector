@@ -21,6 +21,9 @@ import numpy as np
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from modules.database.models import PersonDetection  # noqa: E402
+from modules.database.postgres_manager import PostgresManager  # noqa: E402
+from modules.database.redis_manager import RedisManager  # noqa: E402
 from modules.demographics import GenderClassifier  # noqa: E402
 from modules.demographics.async_worker import AsyncGenderWorker  # noqa: E402
 from modules.demographics.face_detector import FaceDetector  # noqa: E402
@@ -28,13 +31,10 @@ from modules.demographics.keras_tf_gender_classifier import \
     KerasTFGenderClassifier  # noqa: E402
 from modules.demographics.metrics import GenderMetrics  # noqa: E402
 from modules.detection.detector import Detector  # noqa: E402
-from modules.reid import (ReIDCache, ReIDEmbedder,  # noqa: E402
-                          integrate_reid_for_tracks)
+from modules.reid import ReIDEmbedder  # noqa: E402
+from modules.reid import ReIDCache, integrate_reid_for_tracks
 from modules.reid.arcface_embedder import ArcFaceEmbedder  # noqa: E402
 from modules.tracking.tracker import Tracker  # noqa: E402
-from modules.database.models import PersonDetection  # noqa: E402
-from modules.database.postgres_manager import PostgresManager  # noqa: E402
-from modules.database.redis_manager import RedisManager  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -846,7 +846,7 @@ class VideoProcessor:
                 win_name = "Video Test - Kidsplaza"
                 frame_to_show = annotated if annotated is not None else frame
                 cv2.imshow(win_name, frame_to_show)
-                if (cv2.waitKey(1) & 0xFF) == ord('q'):
+                if (cv2.waitKey(1) & 0xFF) == ord("q"):
                     logger.info("User pressed 'q', stopping video processing")
                     break
 
@@ -929,7 +929,9 @@ class VideoProcessor:
                         try:
                             self.db_manager.upsert_track_gender(0, int(t_id), g, conf)
                         except Exception:
-                            logger.warning("upsert_track_gender failed for track_id=%d", t_id)
+                            logger.warning(
+                                "upsert_track_gender failed for track_id=%d", t_id
+                            )
                 unique_total = male_tracks + female_tracks + unknown_tracks
                 self.db_manager.insert_run_gender_summary(
                     run_id=str(self.output_dir.name),
@@ -1124,10 +1126,17 @@ def main():
     )
 
     # Database/Redis flags
-    parser.add_argument("--db-enable", action="store_true", help="Enable PostgreSQL writes")
-    parser.add_argument("--db-dsn", type=str, default=None, help="PostgreSQL DSN string")
     parser.add_argument(
-        "--db-batch-size", type=int, default=100, help="Batch size for insert (default: 100)"
+        "--db-enable", action="store_true", help="Enable PostgreSQL writes"
+    )
+    parser.add_argument(
+        "--db-dsn", type=str, default=None, help="PostgreSQL DSN string"
+    )
+    parser.add_argument(
+        "--db-batch-size",
+        type=int,
+        default=100,
+        help="Batch size for insert (default: 100)",
     )
     parser.add_argument(
         "--db-flush-interval-ms",
@@ -1135,7 +1144,9 @@ def main():
         default=500,
         help="Flush interval in ms for DB buffer (default: 500)",
     )
-    parser.add_argument("--redis-enable", action="store_true", help="Enable Redis cache")
+    parser.add_argument(
+        "--redis-enable", action="store_true", help="Enable Redis cache"
+    )
     parser.add_argument("--redis-url", type=str, default=None, help="Redis URL")
 
     parser.add_argument(

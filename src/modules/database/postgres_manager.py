@@ -5,10 +5,11 @@ PostgreSQL manager with connection pooling and batch operations.
 
 from __future__ import annotations
 
+import json
 import logging
+import time
 from contextlib import contextmanager
 from typing import Generator, Iterable, Optional
-import time
 
 from .models import PersonDetection, PersonTrack
 
@@ -23,6 +24,7 @@ class PostgresManager:
         self.pool_minconn = pool_minconn
         self.pool_maxconn = pool_maxconn
         from typing import Any as _Any
+
         self._pool: Optional[_Any] = None
         self._init_pool()
         self._ins_lat_ms: list[float] = []
@@ -198,7 +200,11 @@ class PostgresManager:
         n = len(data)
         p50 = data[int(0.5 * (n - 1))]
         p95 = data[int(0.95 * (n - 1))]
-        return {"insert_p50_ms": round(p50, 1), "insert_p95_ms": round(p95, 1), "samples": n}
+        return {
+            "insert_p50_ms": round(p50, 1),
+            "insert_p95_ms": round(p95, 1),
+            "samples": n,
+        }
 
     # --- Custom lightweight helpers for counter pipeline ---
     def insert_counter_event(

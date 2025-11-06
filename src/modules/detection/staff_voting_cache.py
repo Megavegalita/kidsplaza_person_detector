@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 class StaffVotingCache:
     """
     Voting cache for staff classification with confidence weighting.
-    
+
     Accumulates votes across frames to determine if a track is staff or customer.
     Once threshold is reached, classification is fixed for that track.
     """
@@ -219,9 +219,13 @@ class StaffVotingCache:
     def get_stats(self) -> Dict:
         """Get cache statistics."""
         total = len(self._cache)
-        fixed_staff = sum(1 for e in self._cache.values() if e.get("final_classification") == "staff")
+        fixed_staff = sum(
+            1 for e in self._cache.values() if e.get("final_classification") == "staff"
+        )
         fixed_customer = sum(
-            1 for e in self._cache.values() if e.get("final_classification") == "customer"
+            1
+            for e in self._cache.values()
+            if e.get("final_classification") == "customer"
         )
         voting = total - fixed_staff - fixed_customer
 
@@ -231,4 +235,3 @@ class StaffVotingCache:
             "fixed_customer": fixed_customer,
             "still_voting": voting,
         }
-

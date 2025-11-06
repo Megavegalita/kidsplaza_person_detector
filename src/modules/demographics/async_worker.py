@@ -41,7 +41,9 @@ class AsyncGenderWorker:
         task_timeout_ms: int = 50,
     ) -> None:
         self._queue: PriorityQueue[_QueuedTask] = PriorityQueue(maxsize=queue_size)
-        self._results: Dict[str, Tuple[str, float, float]] = {}  # gender, conf, timestamp (age disabled)
+        self._results: Dict[
+            str, Tuple[str, float, float]
+        ] = {}  # gender, conf, timestamp (age disabled)
         self._results_lock = threading.Lock()
         self._shutdown = threading.Event()
         self._workers = [
@@ -63,7 +65,10 @@ class AsyncGenderWorker:
         )
 
     def enqueue(
-        self, task_id: str, priority: int, func: Callable[[], Tuple[str, float, int, float]]
+        self,
+        task_id: str,
+        priority: int,
+        func: Callable[[], Tuple[str, float, int, float]],
     ) -> bool:
         """Enqueue a classification task.
 

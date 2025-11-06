@@ -50,7 +50,9 @@ class GenderOpenCV:
 
         # Model directory - use existing age_gender_opencv directory (models already there)
         # Path: src/modules/demographics/gender_opencv.py -> go up 3 levels to project root
-        model_dir = Path(__file__).parent.parent.parent.parent / "models" / "age_gender_opencv"
+        model_dir = (
+            Path(__file__).parent.parent.parent.parent / "models" / "age_gender_opencv"
+        )
         model_dir.mkdir(parents=True, exist_ok=True)
 
         # Load gender model
@@ -67,9 +69,7 @@ class GenderOpenCV:
                 "Gender models not found. Please download manually from: %s",
                 "https://github.com/Isfhan/age-gender-detection",
             )
-            logger.warning(
-                "Place files in: %s", model_dir
-            )
+            logger.warning("Place files in: %s", model_dir)
             return
 
         try:
@@ -170,7 +170,9 @@ class GenderOpenCV:
             return gender, confidence
 
         except Exception as e:
-            logger.error("Error classifying gender with OpenCV DNN: %s", e, exc_info=True)
+            logger.error(
+                "Error classifying gender with OpenCV DNN: %s", e, exc_info=True
+            )
             return "Unknown", 0.0
 
     def release(self) -> None:
@@ -210,6 +212,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"❌ Error: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
-

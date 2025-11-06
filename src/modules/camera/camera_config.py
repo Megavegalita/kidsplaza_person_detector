@@ -110,7 +110,7 @@ class CameraConfig:
             Dictionary with default feature settings
         """
         default_features = self.config_data.get("default_features", {})
-        
+
         # System defaults if not in config
         system_defaults = {
             "body_detection": {"enabled": True, "always": True},
@@ -119,12 +119,15 @@ class CameraConfig:
             "gender_classification": {"enabled": True, "always": False},
             "counter": {"enabled": True, "always": False},
         }
-        
+
         # Merge config defaults with system defaults
         merged = system_defaults.copy()
         for feature_name, feature_config in default_features.items():
-            merged[feature_name] = {**system_defaults.get(feature_name, {}), **feature_config}
-        
+            merged[feature_name] = {
+                **system_defaults.get(feature_name, {}),
+                **feature_config,
+            }
+
         return merged
 
     def get_channel_features(self, channel_id: int) -> Dict:
@@ -147,10 +150,10 @@ class CameraConfig:
 
         # Get default features
         default_features = self.get_default_features()
-        
+
         # Get channel-specific features (if any)
         channel_features = channel.get("features", {})
-        
+
         # Merge: channel-specific overrides defaults
         merged_features = default_features.copy()
         for feature_name, feature_config in channel_features.items():
@@ -158,16 +161,14 @@ class CameraConfig:
                 # Merge nested dicts
                 merged_features[feature_name] = {
                     **merged_features[feature_name],
-                    **feature_config
+                    **feature_config,
                 }
             else:
                 merged_features[feature_name] = feature_config
-        
+
         return merged_features
 
-    def get_feature_config(
-        self, channel_id: int, feature_name: str
-    ) -> Optional[Dict]:
+    def get_feature_config(self, channel_id: int, feature_name: str) -> Optional[Dict]:
         """
         Get configuration for specific feature on specific channel.
 
@@ -181,9 +182,7 @@ class CameraConfig:
         features = self.get_channel_features(channel_id)
         return features.get(feature_name)
 
-    def is_feature_enabled(
-        self, channel_id: int, feature_name: str
-    ) -> bool:
+    def is_feature_enabled(self, channel_id: int, feature_name: str) -> bool:
         """
         Check if a feature is enabled for a specific channel.
 
@@ -197,7 +196,7 @@ class CameraConfig:
         feature_config = self.get_feature_config(channel_id, feature_name)
         if feature_config is None:
             return False
-        
+
         return feature_config.get("enabled", False)
 
     def is_feature_always_enabled(self, feature_name: str) -> bool:

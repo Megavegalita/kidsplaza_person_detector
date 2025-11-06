@@ -98,12 +98,14 @@ class FaceGenderClassifier:
             if face_crop is None or face_crop.size == 0:
                 logger.debug("Face crop is None or empty")
                 return "Unknown", 0.0
-            
+
             h, w = face_crop.shape[:2]
             if h < 48 or w < 48:  # Minimum size for reasonable classification
-                logger.debug("Face crop too small: %dx%d, skipping classification", w, h)
+                logger.debug(
+                    "Face crop too small: %dx%d, skipping classification", w, h
+                )
                 return "Unknown", 0.0
-            
+
             # Convert BGR to RGB
             face_rgb = cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
 

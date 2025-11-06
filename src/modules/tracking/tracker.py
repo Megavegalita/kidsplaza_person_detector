@@ -192,18 +192,22 @@ class Tracker:
         # This ensures tracks persist even when detections are sparse
         # Convert tracks to detection format for consistency
         if len(detections) == 0:
-            predicted_tracks = self._get_confirmed_tracks(max_time_since_update=self.max_age, include_unconfirmed=True)
+            predicted_tracks = self._get_confirmed_tracks(
+                max_time_since_update=self.max_age, include_unconfirmed=True
+            )
             # Convert tracks to detection format
             track_detections = []
             for track_dict in predicted_tracks:
-                track_detections.append({
-                    "track_id": track_dict["track_id"],
-                    "bbox": track_dict["bbox"],
-                    "confidence": track_dict["confidence"],
-                    "class_name": track_dict["class_name"],
-                    "hits": track_dict["hits"],
-                    "age": track_dict["age"],
-                })
+                track_detections.append(
+                    {
+                        "track_id": track_dict["track_id"],
+                        "bbox": track_dict["bbox"],
+                        "confidence": track_dict["confidence"],
+                        "class_name": track_dict["class_name"],
+                        "hits": track_dict["hits"],
+                        "age": track_dict["age"],
+                    }
+                )
             return track_detections
 
         # If no tracks yet, create new tracks
@@ -259,13 +263,17 @@ class Tracker:
                 # This prevents matching detections that are too far apart, avoiding duplicate tracks
                 if best_t_idx_fb is not None and best_iou >= 0.15:
                     track = self.tracks[best_t_idx_fb]
-                    track.update(det_bbox_fb, detections[d_idx]["confidence"], self.ema_alpha)
+                    track.update(
+                        det_bbox_fb, detections[d_idx]["confidence"], self.ema_alpha
+                    )
                     matched_tracks.add(best_t_idx_fb)
                     matched_indices.append((d_idx, best_t_idx_fb))
                     unmatched_detections.discard(d_idx)
                     logger.debug(
                         "Fallback match: detection %d → track %d (IoU=%.2f)",
-                        d_idx, self.tracks[best_t_idx_fb].track_id, best_iou
+                        d_idx,
+                        self.tracks[best_t_idx_fb].track_id,
+                        best_iou,
                     )
 
         # Handle remaining unmatched detections (try Re-ID match; else create new track)
@@ -443,10 +451,14 @@ class Tracker:
 
         return matches
 
-    def _get_confirmed_tracks(self, max_time_since_update: Optional[int] = None, include_unconfirmed: bool = False) -> List[Dict]:
+    def _get_confirmed_tracks(
+        self,
+        max_time_since_update: Optional[int] = None,
+        include_unconfirmed: bool = False,
+    ) -> List[Dict]:
         """
         Get confirmed tracks (hits >= min_hits).
-        
+
         Args:
             max_time_since_update: Optional limit on time_since_update (for filtering stale tracks)
             include_unconfirmed: If True, include tracks with hits < min_hits (for continuity)
@@ -457,7 +469,10 @@ class Tracker:
             # Include confirmed tracks OR unconfirmed if requested (for continuity)
             if track.hits >= self.min_hits or include_unconfirmed:
                 # Filter by time_since_update if specified (only show recently updated tracks)
-                if max_time_since_update is not None and track.time_since_update > max_time_since_update:
+                if (
+                    max_time_since_update is not None
+                    and track.time_since_update > max_time_since_update
+                ):
                     continue
                 confirmed_tracks.append(
                     {

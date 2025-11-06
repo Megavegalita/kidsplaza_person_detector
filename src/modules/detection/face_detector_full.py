@@ -19,10 +19,8 @@ import numpy as np
 # This module expects to be imported after sys.path is set up
 try:
     # Try importing - will work if sys.path is already set
-    from src.modules.demographics.face_detector import (
-        FaceDetector,
-        MEDIAPIPE_AVAILABLE,
-    )
+    from src.modules.demographics.face_detector import (MEDIAPIPE_AVAILABLE,
+                                                        FaceDetector)
 except ImportError:
     # If direct import fails, will try lazy import
     FaceDetector = None  # type: ignore
@@ -34,7 +32,7 @@ logger = logging.getLogger(__name__)
 class FaceDetectorFull:
     """
     Full-frame face detector using MediaPipe.
-    
+
     Detects faces directly from full camera frames, then estimates
     full body bounding boxes from face positions.
     """
@@ -66,24 +64,26 @@ class FaceDetectorFull:
         # Try to import FaceDetector if not already imported
         _FaceDetectorClass = FaceDetector
         _MPAvailable = MEDIAPIPE_AVAILABLE
-        
+
         if _FaceDetectorClass is None:
             try:
                 import sys
                 from pathlib import Path
+
                 src_path = Path(__file__).parent.parent.parent
                 if str(src_path) not in sys.path:
                     sys.path.insert(0, str(src_path))
-                from src.modules.demographics.face_detector import (
-                    FaceDetector as _FD,
-                    MEDIAPIPE_AVAILABLE as _MP,
-                )
+                from src.modules.demographics.face_detector import \
+                    MEDIAPIPE_AVAILABLE as _MP
+                from src.modules.demographics.face_detector import \
+                    FaceDetector as _FD
+
                 _FaceDetectorClass = _FD
                 _MPAvailable = _MP
             except ImportError as e:
                 logger.error("Failed to import FaceDetector: %s", e)
                 raise ImportError("mediapipe is required for face detection") from e
-        
+
         if not _MPAvailable:
             logger.error("mediapipe is required for face detection but not available")
             raise ImportError("mediapipe is required for face detection")
@@ -94,14 +94,14 @@ class FaceDetectorFull:
             min_detection_confidence=min_detection_confidence,
             model_selection=model_selection,
         )
-        
+
         # Check if face_detection was initialized
         if self._base_detector.face_detection is None:
             raise ImportError(
                 "Failed to initialize MediaPipe FaceDetection. "
                 "MediaPipe may not be properly installed."
             )
-        
+
         # Access the underlying MediaPipe face_detection instance
         self.face_detection = self._base_detector.face_detection
 
@@ -112,9 +112,7 @@ class FaceDetectorFull:
             body_expand_ratio,
         )
 
-    def detect_persons_from_faces(
-        self, frame: np.ndarray
-    ) -> List[Dict[str, Any]]:
+    def detect_persons_from_faces(self, frame: np.ndarray) -> List[Dict[str, Any]]:
         """
         Detect persons by detecting faces first, then expanding to full body.
 
@@ -179,12 +177,18 @@ class FaceDetectorFull:
 
                     # Estimate body width (wider than face)
                     body_width = face_w * self.body_expand_ratio
-                    body_height = face_h * self.body_expand_ratio * (1 + self.body_expand_vertical)
+                    body_height = (
+                        face_h
+                        * self.body_expand_ratio
+                        * (1 + self.body_expand_vertical)
+                    )
 
                     # Center body bbox on face, but shift downward
                     # Face is typically at top 1/3 of body
                     body_x1 = int(face_center_x - body_width / 2)
-                    body_y1 = int(face_center_y - face_h * 0.5)  # Face is at top of body
+                    body_y1 = int(
+                        face_center_y - face_h * 0.5
+                    )  # Face is at top of body
                     body_x2 = int(body_x1 + body_width)
                     body_y2 = int(body_y1 + body_height)
 
@@ -196,11 +200,15 @@ class FaceDetectorFull:
 
                     if body_x2 > body_x1 and body_y2 > body_y1:
                         person_detection = {
-                            "bbox": np.array([body_x1, body_y1, body_x2, body_y2], dtype=np.float32),
+                            "bbox": np.array(
+                                [body_x1, body_y1, body_x2, body_y2], dtype=np.float32
+                            ),
                             "confidence": float(confidence),
                             "class_id": 0,
                             "class_name": "person",
-                            "face_bbox": np.array([face_x1, face_y1, face_x2, face_y2], dtype=np.float32),
+                            "face_bbox": np.array(
+                                [face_x1, face_y1, face_x2, face_y2], dtype=np.float32
+                            ),
                         }
                         person_detections.append(person_detection)
 
@@ -242,4 +250,3 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"❌ Error: {e}")
         sys.exit(1)
-

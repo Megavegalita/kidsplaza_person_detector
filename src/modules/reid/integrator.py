@@ -60,10 +60,10 @@ def integrate_reid_for_tracks(
             ImageProcessor  # noqa: E402
 
         processor = ImageProcessor()
-        
+
         # OPTIMIZED: Filter and prepare detections for parallel processing
         candidates: List[Tuple[Dict, int]] = []  # (detection, track_id)
-        
+
         for det in detections_with_tracks:
             if len(candidates) >= max_per_frame:
                 break
@@ -90,14 +90,16 @@ def integrate_reid_for_tracks(
             bbox = det.get("bbox")
             if bbox is None:
                 continue
-            
+
             candidates.append((det, int(track_id)))
-        
+
         if len(candidates) == 0:
             return
-        
+
         # OPTIMIZED: Parallelize embedding computation
-        def _compute_embedding(det_info: Tuple[Dict, int]) -> Tuple[int, np.ndarray, Optional[List[List[float]]]]:
+        def _compute_embedding(
+            det_info: Tuple[Dict, int]
+        ) -> Tuple[int, np.ndarray, Optional[List[List[float]]]]:
             """Compute embedding for a single detection in parallel."""
             det, track_id = det_info
             try:
@@ -108,9 +110,9 @@ def integrate_reid_for_tracks(
                 )
                 if crop is None:
                     return track_id, None, None
-                
+
                 emb = embedder.embed(crop)
-                
+
                 # Multi-embedding support
                 embeddings_list = None
                 if append_mode and max_embeddings > 1:
@@ -125,22 +127,28 @@ def integrate_reid_for_tracks(
                     ):
                         existing = [prev.embedding.tolist()]
                     existing.append(emb.tolist())
-                    embeddings_list = existing[-int(max_embeddings):]
-                
+                    embeddings_list = existing[-int(max_embeddings) :]
+
                 return track_id, emb, embeddings_list
             except Exception as e:
-                logger.debug("Embedding computation error for track %d: %s", track_id, e)
+                logger.debug(
+                    "Embedding computation error for track %d: %s", track_id, e
+                )
                 return track_id, None, None
-        
+
         # Use ThreadPoolExecutor for parallel embedding (2 workers for Re-ID)
         embeds_done = 0
-        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="reid-embed") as executor:
-            futures = {executor.submit(_compute_embedding, cand): cand for cand in candidates}
-            
+        with ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="reid-embed"
+        ) as executor:
+            futures = {
+                executor.submit(_compute_embedding, cand): cand for cand in candidates
+            }
+
             for future in as_completed(futures):
                 if embeds_done >= max_per_frame:
                     break
-                
+
                 try:
                     track_id, emb, embeddings_list = future.result(timeout=1.0)
                     if emb is not None:
