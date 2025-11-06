@@ -1150,6 +1150,15 @@ class LiveCameraProcessor:
                                 # Only log customer events (staff events are filtered out)
                                 if self.db_manager is not None:
                                     try:
+                                        logger.info(
+                                            "DB: insert counter_event ch=%s zone=%s evt=%s pid=%s tid=%s frame=%s",
+                                            str(self.channel_id),
+                                            str(event.get("zone_id")),
+                                            str(event.get("type")),
+                                            str(event.get("person_id")),
+                                            str(event.get("track_id")),
+                                            str(frame_num),
+                                        )
                                         self.db_manager.insert_counter_event(
                                             channel_id=self.channel_id,
                                             zone_id=str(event.get("zone_id")),
@@ -2058,8 +2067,22 @@ def main() -> None:
 
             with open(db_config_path) as f:
                 db_config = json.load(f)
-                db_dsn = db_config.get("postgresql", {}).get("dsn")
-                redis_url = db_config.get("redis", {}).get("url")
+                pg = db_config.get("postgresql", {}) or {}
+                # Prefer explicit dsn, then url, then compose
+                db_dsn = (
+                    pg.get("dsn")
+                    or pg.get("url")
+                )
+                if not db_dsn:
+                    user = pg.get("username") or ""
+                    pwd = pg.get("password") or ""
+                    host = pg.get("host") or "localhost"
+                    port = pg.get("port") or 5432
+                    dbname = pg.get("database") or "postgres"
+                    auth = f"{user}:{pwd}@" if pwd else f"{user}@" if user else ""
+                    db_dsn = f"postgresql://{auth}{host}:{port}/{dbname}"
+                redis_cfg = db_config.get("redis", {}) or {}
+                redis_url = redis_cfg.get("url")
 
         # If DB DSN available, enable DB writes by default
         if db_dsn:
