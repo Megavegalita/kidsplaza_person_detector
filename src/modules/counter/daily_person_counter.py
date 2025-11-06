@@ -134,11 +134,9 @@ class DailyPersonCounter:
             person_id = self.track_to_person.get(track_id)
             
             if person_id is None:
-                # Fallback disabled: strictly require person_id
-                logger.debug(
-                    "No person_id for track %d, skipping event (fallback disabled)",
-                    track_id,
-                )
+                # Allow event without person_id (no daily uniqueness applied)
+                event["person_id"] = None
+                filtered_events.append(event)
                 continue
             
             # Check daily count constraint
