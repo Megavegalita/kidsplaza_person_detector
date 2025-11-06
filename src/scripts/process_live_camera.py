@@ -2084,11 +2084,6 @@ def main() -> None:
                 redis_cfg = db_config.get("redis", {}) or {}
                 redis_url = redis_cfg.get("url")
 
-        # If DB DSN available, enable DB writes by default
-        if db_dsn:
-            processor_args["db_enable"] = True
-            processor_args["db_dsn"] = db_dsn
-
         # Create processor (reuse VideoProcessor args pattern)
         # Initialize with defaults - will be overridden by config
         processor_args = {
@@ -2108,6 +2103,11 @@ def main() -> None:
             "tracker_iou_threshold": 0.3,
             "tracker_ema_alpha": 0.5,
         }
+
+        # If DB DSN available, enable DB writes by default (after dict creation)
+        if db_dsn:
+            processor_args["db_enable"] = True
+            processor_args["db_dsn"] = db_dsn
 
         # Apply preset if specified
         if args.preset == "gender_main_v1":
