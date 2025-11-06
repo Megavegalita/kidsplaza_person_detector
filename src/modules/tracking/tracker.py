@@ -186,11 +186,25 @@ class Tracker:
         for track in self.tracks:
             track.predict()
 
-        # If no detections, return only recently updated tracks (time_since_update <= 10)
-        # This prevents showing stale tracks from false positives
-        # 10 frames = ~0.4 seconds at 24 FPS - reasonable for continuous display
+        # If no detections, return predicted tracks (including unconfirmed) up to max_age
+        # Use max_age instead of hardcoded 10 to maintain continuity
+        # Include unconfirmed tracks to maintain continuity even when detections are sparse
+        # This ensures tracks persist even when detections are sparse
+        # Convert tracks to detection format for consistency
         if len(detections) == 0:
-            return self._get_confirmed_tracks(max_time_since_update=10)
+            predicted_tracks = self._get_confirmed_tracks(max_time_since_update=self.max_age, include_unconfirmed=True)
+            # Convert tracks to detection format
+            track_detections = []
+            for track_dict in predicted_tracks:
+                track_detections.append({
+                    "track_id": track_dict["track_id"],
+                    "bbox": track_dict["bbox"],
+                    "confidence": track_dict["confidence"],
+                    "class_name": track_dict["class_name"],
+                    "hits": track_dict["hits"],
+                    "age": track_dict["age"],
+                })
+            return track_detections
 
         # If no tracks yet, create new tracks
         if len(self.tracks) == 0:
@@ -429,17 +443,19 @@ class Tracker:
 
         return matches
 
-    def _get_confirmed_tracks(self, max_time_since_update: Optional[int] = None) -> List[Dict]:
+    def _get_confirmed_tracks(self, max_time_since_update: Optional[int] = None, include_unconfirmed: bool = False) -> List[Dict]:
         """
         Get confirmed tracks (hits >= min_hits).
         
         Args:
             max_time_since_update: Optional limit on time_since_update (for filtering stale tracks)
+            include_unconfirmed: If True, include tracks with hits < min_hits (for continuity)
         """
         confirmed_tracks = []
 
         for track in self.tracks:
-            if track.hits >= self.min_hits:
+            # Include confirmed tracks OR unconfirmed if requested (for continuity)
+            if track.hits >= self.min_hits or include_unconfirmed:
                 # Filter by time_since_update if specified (only show recently updated tracks)
                 if max_time_since_update is not None and track.time_since_update > max_time_since_update:
                     continue

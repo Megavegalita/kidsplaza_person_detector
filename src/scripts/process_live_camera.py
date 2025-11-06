@@ -46,6 +46,8 @@ from src.modules.detection.face_detector_retinaface import (  # noqa: E402
     FaceDetectorRetinaFace,
 )
 from src.modules.detection.image_processor import ImageProcessor  # noqa: E402
+from src.modules.detection.staff_classifier import StaffClassifier  # noqa: E402
+from src.modules.detection.staff_voting_cache import StaffVotingCache  # noqa: E402
 from src.modules.reid.arcface_embedder import ArcFaceEmbedder  # noqa: E402
 from src.modules.reid.cache import ReIDCache  # noqa: E402
 from src.modules.reid.embedder import ReIDEmbedder  # noqa: E402
@@ -115,6 +117,9 @@ class LiveCameraProcessor:
         display_fps: float = 15.0,
         counter_zones: Optional[List[Dict[str, Any]]] = None,
         detect_every_n: Optional[int] = None,
+        staff_detection_enable: bool = False,
+        staff_detection_model_path: str = "models/kidsplaza/best.pt",
+        staff_detection_conf_threshold: float = 0.5,
     ) -> None:
         """
         Initialize live camera processor.
@@ -243,6 +248,33 @@ class LiveCameraProcessor:
 
         logger.info("Using YOLOv8 body detection for person detection")
         logger.info("YOLOv8 detection confidence threshold: %.2f", conf_threshold)
+
+        # Initialize staff classifier (optional)
+        self.staff_detection_enable = bool(staff_detection_enable)
+        self.staff_classifier: Optional[StaffClassifier] = None
+        self.staff_voting_cache: Optional[StaffVotingCache] = None
+        if self.staff_detection_enable:
+            try:
+                self.staff_classifier = StaffClassifier(
+                    model_path=staff_detection_model_path,
+                    conf_threshold=staff_detection_conf_threshold,
+                )
+                # Initialize voting cache with threshold 0.4 parameters
+                self.staff_voting_cache = StaffVotingCache(
+                    vote_window=10,
+                    vote_threshold=4,
+                    cache_keep_frames=30,
+                )
+                logger.info(
+                    "Staff classifier initialized: model=%s, conf=%.2f, vote_window=10, vote_threshold=4",
+                    staff_detection_model_path,
+                    staff_detection_conf_threshold,
+                )
+            except Exception as e:
+                logger.error("Failed to initialize staff classifier: %s", e)
+                self.staff_classifier = None
+                self.staff_voting_cache = None
+                self.staff_detection_enable = False
 
         # Initialize tracker
         self.tracker = Tracker(
@@ -769,19 +801,199 @@ class LiveCameraProcessor:
                     )
 
                 # Run tracking - ALWAYS update tracker to get predicted tracks
+                # IMPORTANT: Update tracker with ALL detections (before staff filtering)
+                # This ensures tracker maintains continuity even when detections are sparse
                 # Tracker can maintain and predict tracks even without new detections
                 # This ensures bounding boxes display continuously
                 tracked_detections = self.tracker.update(
                     detections, frame=frame, session_id=session_id
                 )
                 detections = tracked_detections
+                
+                # Update unique_track_ids from ALL tracked detections (before filtering)
+                # This ensures stats reflect all tracks, not just customers
+                for d in detections:
+                    t_id = d.get("track_id")
+                    if t_id is not None:
+                        unique_track_ids.add(int(t_id))
 
-                # Create annotated frame if display enabled - OPTIMIZED
-                # Only annotate when we have detections (either new or recently validated)
+                # Log tracker stats for debugging (including when no detections)
+                if frame_num % 100 == 0:
+                    track_ids = [d.get("track_id") for d in detections if d.get("track_id") is not None]
+                    logger.info(
+                        "Tracker update: %d detections, %d with track_id: %s (should_detect=%s)",
+                        len(detections),
+                        len(track_ids),
+                        track_ids[:5] if track_ids else "none",
+                        should_detect,
+                    )
+
+                # Staff classification with voting mechanism
+                # IMPORTANT: Only run when we have person detections (should_detect=True)
+                # This ensures we only classify when person is actually detected
+                if (
+                    self.staff_detection_enable
+                    and self.staff_classifier is not None
+                    and self.staff_voting_cache is not None
+                    and len(detections) > 0
+                    and should_detect  # Only classify when person is detected
+                ):
+                    # Debug: Log when staff classification block is entered
+                    if frame_num % 50 == 0:
+                        track_ids = [d.get("track_id") for d in detections if d.get("track_id") is not None]
+                        logger.info(
+                            "Staff classification block: %d detections, %d with track_id: %s",
+                            len(detections),
+                            len(track_ids),
+                            track_ids[:5] if track_ids else "none",
+                        )
+                    try:
+                        # Get active track IDs for cache cleanup
+                        active_track_ids = {
+                            int(det.get("track_id"))
+                            for det in detections
+                            if det.get("track_id") is not None
+                        }
+
+                        # Cleanup stale tracks periodically
+                        if frame_num % 60 == 0:  # Every 60 frames
+                            self.staff_voting_cache.cleanup(active_track_ids, frame_num)
+
+                        # Process each detection
+                        for det in detections:
+                            track_id = det.get("track_id")
+                            if track_id is None:
+                                continue
+
+                            track_id_int = int(track_id)
+
+                            # Check if classification is fixed in cache
+                            cached_classification = self.staff_voting_cache.get_classification(
+                                track_id_int
+                            )
+
+                            if cached_classification is not None:
+                                # Use cached classification
+                                det["is_staff"] = cached_classification == "staff"
+                                det["person_type"] = cached_classification
+                                logger.debug(
+                                    "Staff classification [track %d]: cached=%s",
+                                    track_id_int,
+                                    cached_classification,
+                                )
+                            else:
+                                # Need to classify and vote
+                                # Classify on detection frames OR when we have a valid bbox
+                                # This ensures classification happens even on interpolation frames
+                                bbox = det.get("bbox")
+                                if bbox is not None:
+                                    # Only classify on detection frames to avoid redundant processing
+                                    # But check cache on all frames
+                                    if should_detect:
+                                        # Crop person region
+                                        x1, y1, x2, y2 = map(int, bbox)
+                                        # Create bbox array (np is imported at module level)
+                                        bbox_array = np.array([x1, y1, x2, y2], dtype=np.int32)
+                                        person_crop = self.processor.crop_person(frame, bbox_array)
+
+                                        if person_crop is not None:
+                                            try:
+                                                # Classify as staff or customer
+                                                person_type, staff_confidence = (
+                                                    self.staff_classifier.classify(person_crop)
+                                                )
+
+                                                # Default to customer if classification fails
+                                                if person_type not in ["staff", "customer"]:
+                                                    person_type = "customer"
+                                                    staff_confidence = 0.0
+
+                                                # Vote with confidence weighting
+                                                final_classification, is_fixed = (
+                                                    self.staff_voting_cache.vote(
+                                                        track_id=track_id_int,
+                                                        classification=person_type,
+                                                        confidence=staff_confidence,
+                                                        frame_num=frame_num,
+                                                    )
+                                                )
+
+                                                # Set is_staff flag
+                                                if is_fixed and final_classification is not None:
+                                                    det["is_staff"] = final_classification == "staff"
+                                                    det["person_type"] = final_classification
+                                                    logger.info(
+                                                        "Staff classification [track %d]: FIXED=%s (votes: type=%s, conf=%.3f)",
+                                                        track_id_int,
+                                                        final_classification,
+                                                        person_type,
+                                                        staff_confidence,
+                                                    )
+                                                else:
+                                                    # Still voting, use current classification temporarily
+                                                    det["is_staff"] = person_type == "staff"
+                                                    det["person_type"] = person_type
+                                                    logger.info(
+                                                        "Staff classification [track %d]: VOTING (type=%s, conf=%.3f)",
+                                                        track_id_int,
+                                                        person_type,
+                                                        staff_confidence,
+                                                    )
+                                            except Exception as e:
+                                                logger.warning(
+                                                    "Staff classification failed for track %d: %s",
+                                                    track_id_int,
+                                                    e,
+                                                )
+                                                # Default to customer on error
+                                                det["is_staff"] = False
+                                                det["person_type"] = "customer"
+                                    else:
+                                        # Not a detection frame, use cached classification if available
+                                        # If not fixed yet, default to customer (will be updated on next detection frame)
+                                        if cached_classification is None:
+                                            det["is_staff"] = False
+                                            det["person_type"] = None  # Not classified yet
+                                else:
+                                    # No bbox, cannot classify
+                                    if cached_classification is None:
+                                        det["is_staff"] = False
+                                        det["person_type"] = None
+
+                    except Exception as e:
+                        logger.warning("Staff classification error: %s", e)
+
+                # Filter staff detections BEFORE Re-ID and Counter
+                # Staff detections will be skipped from Re-ID and Counter processing
+                customer_detections = []
+                staff_detections = []
+                
+                if self.staff_detection_enable and self.staff_voting_cache is not None:
+                    # Split detections based on is_staff flag
+                    for det in detections:
+                        if det.get("is_staff") is True:
+                            staff_detections.append(det)
+                        else:
+                            customer_detections.append(det)
+                else:
+                    # Staff detection not enabled, treat all as customers
+                    customer_detections = detections
+                    staff_detections = []
+
+                # Log filtering stats periodically
+                if len(staff_detections) > 0 and frame_num % 100 == 0:
+                    logger.info(
+                        "Staff filtering: %d staff (filtered), %d customer (processing)",
+                        len(staff_detections),
+                        len(customer_detections),
+                    )
+
                 # Prepare detections for display with gender/age info
+                # Merge customer and staff detections for display
                 display_detections = []
-                if self.display and len(detections) > 0:
-                    for d in detections:
+                if self.display:
+                    # Add gender info to customer detections only (staff don't need gender)
+                    for d in customer_detections:
                         display_det = d.copy()
                         track_id = d.get("track_id")
                         if track_id is not None:
@@ -798,6 +1010,11 @@ class LiveCameraProcessor:
                                 display_det["gender"] = gender
                                 display_det["gender_confidence"] = gender_conf
                         display_detections.append(display_det)
+                    
+                    # Add staff detections (no gender info needed)
+                    for d in staff_detections:
+                        display_det = d.copy()
+                        display_detections.append(display_det)
 
                 # Defer annotation until after Re-ID and Counter so PID can be rendered
                 annotated = None
@@ -806,11 +1023,11 @@ class LiveCameraProcessor:
                 # All detections already have faces (detected from faces directly)
                 # This eliminates false positives like motorcycles naturally
 
-                # Integrate Re-ID - ONLY when face detection found persons
-                # This saves significant processing time when no persons are present
+                # Integrate Re-ID - ONLY for customer detections (skip staff)
+                # This saves significant processing time since staff don't need Re-ID
                 if (
-                    len(detections)
-                    > 0  # CRITICAL: Only run Re-ID if we have detections (faces found)
+                    len(customer_detections)
+                    > 0  # CRITICAL: Only run Re-ID if we have customer detections
                     and should_detect  # Only on detection frames (skip on interpolation frames)
                     and self.reid_enable
                     and self.reid_embedder is not None
@@ -819,7 +1036,7 @@ class LiveCameraProcessor:
                     try:
                         integrate_reid_for_tracks(
                             frame,
-                            detections,
+                            customer_detections,  # Only process customers
                             cast(ReIDEmbedder, self.reid_embedder),
                             self.reid_cache,
                             session_id=session_id,
@@ -838,11 +1055,11 @@ class LiveCameraProcessor:
                             self.person_identity_manager is not None
                             and self.reid_embedder is not None
                         ):
-                            import numpy as np
+                            # np is already imported at module level
                             from typing import cast as _cast
                             # Try to attach embedding/person_id from cache; if missing, compute on-demand (limited)
                             on_demand_budget = 10  # compute up to 10 embeddings per frame to ensure PID resolution
-                            for det in detections:
+                            for det in customer_detections:  # Only process customers
                                 track_id = det.get("track_id")
                                 if track_id is None:
                                     continue
@@ -892,8 +1109,9 @@ class LiveCameraProcessor:
                         logger.warning("Re-ID integration error: %s", e)
 
                 # Always try to attach person_id from cache every frame (independent of counter)
+                # Only for customer detections
                 if self.reid_enable and self.person_identity_manager is not None and self.reid_cache is not None:
-                    for det in detections:
+                    for det in customer_detections:  # Only process customers
                         track_id = det.get("track_id")
                         if track_id is None:
                             continue
@@ -911,17 +1129,14 @@ class LiveCameraProcessor:
                         except Exception as e:
                             logger.debug("Attach PID from cache failed for track %d: %s", track_id, e)
 
-                # Update unique track id set
-                for d in detections:
-                    t_id = d.get("track_id")
-                    if t_id is not None:
-                        unique_track_ids.add(int(t_id))
+                # Note: unique_track_ids already updated from all detections above
+                # This ensures stats include all tracks (staff + customer) for continuity tracking
 
-                # Counter update (if enabled) — after Re-ID so detections may include person_id
+                # Counter update (if enabled) — ONLY for customer detections
                 counter_result = None
-                if self.counter is not None and len(detections) > 0:
+                if self.counter is not None and len(customer_detections) > 0:
                     try:
-                        counter_result = self.counter.update(detections, frame, frame_num=frame_num)
+                        counter_result = self.counter.update(customer_detections, frame, frame_num=frame_num)
                         if counter_result.get("events"):
                             for event in counter_result["events"]:
                                 logger.info(
@@ -932,6 +1147,7 @@ class LiveCameraProcessor:
                                     event["track_id"],
                                 )
                                 # DB write (non-blocking best-effort)
+                                # Only log customer events (staff events are filtered out)
                                 if self.db_manager is not None:
                                     try:
                                         self.db_manager.insert_counter_event(
@@ -940,7 +1156,7 @@ class LiveCameraProcessor:
                                             zone_name=str(event.get("zone_name")),
                                             event_type=str(event.get("type")),
                                             track_id=int(event.get("track_id")) if event.get("track_id") is not None else None,
-                                            person_id=None,
+                                            person_id=event.get("person_id"),
                                             frame_number=int(frame_num),
                                             extra_json={"run_id": self.run_id or "", "session_id": session_id},
                                         )
@@ -949,16 +1165,21 @@ class LiveCameraProcessor:
                     except Exception as e:
                         logger.warning("Counter update error: %s", e)
 
+                # Merge customer and staff detections for display
+                # Staff will be displayed with red boxes, customers with green boxes
+                all_detections_for_display = display_detections if self.display else (customer_detections + staff_detections)
+
                 # Now render overlay after Re-ID and Counter so PID shows up
                 if self.display:
                     if annotated is None:
                         annotated = frame.copy()
-                    if len(display_detections) > 0:
-                        annotated = self.processor.draw_detections(annotated, display_detections)
+                    if len(all_detections_for_display) > 0:
+                        annotated = self.processor.draw_detections(annotated, all_detections_for_display)
                     if self.counter is not None:
                         annotated = self.counter.draw_zones(annotated)
 
                 # Gender and Age classification (PyTorch-based, no TensorFlow)
+                # Only for customer detections (staff don't need gender classification)
                 if (
                     self.gender_enable
                     and (
@@ -969,7 +1190,7 @@ class LiveCameraProcessor:
                 ):
                     self._process_gender_classification(
                         frame,
-                        detections,
+                        customer_detections,  # Only process customers
                         frame_num,
                         session_id,
                         frame_width,
@@ -1020,12 +1241,13 @@ class LiveCameraProcessor:
                         break
 
                 # Database storage (async write to avoid blocking)
+                # Only store customer detections (staff are filtered out)
                 if should_detect and self.db_enable and self.db_manager is not None:
                     if self._db_executor is not None:
                         # Submit async write (non-blocking)
                         self._db_executor.submit(
                             self._store_detections_async,
-                            detections.copy(),
+                            customer_detections.copy(),  # Only store customers
                             frame_num,
                             track_id_to_gender.copy(),
                             track_id_to_gender_conf.copy(),
@@ -1033,7 +1255,7 @@ class LiveCameraProcessor:
                     else:
                         # Fallback to sync write
                         self._store_detections(
-                            detections,
+                            customer_detections,  # Only store customers
                             frame_num,
                             track_id_to_gender,
                             track_id_to_gender_conf,
@@ -1418,12 +1640,20 @@ class LiveCameraProcessor:
         track_id_to_gender: Dict[int, str],
         track_id_to_gender_conf: Dict[int, float],
     ) -> None:
-        """Store detections in database buffer."""
+        """Store detections in database buffer (only customers, skip staff)."""
         if self.db_manager is None:
             return
 
+        # Filter out staff detections - only store customers
+        customer_detections = [
+            d for d in detections if d.get("is_staff") is not True
+        ]
+
+        if len(customer_detections) == 0:
+            return
+
         now = datetime.now()
-        for d in detections:
+        for d in customer_detections:
             bbox = d.get("bbox")
             x1, y1, x2, y2 = self._parse_bbox_xyxy(bbox)
             if x1 is None or y1 is None or x2 is None or y2 is None:
@@ -1944,6 +2174,19 @@ def main() -> None:
                     processor_args["gender_voting_window"] = gender_config.get("voting_window", 10)
                     processor_args["gender_max_per_frame"] = gender_config.get("max_per_frame", 4)
                     processor_args["gender_adaptive_enabled"] = gender_config.get("adaptive_enabled", False)
+            
+            # Load staff detection config
+            staff_config = channel_features.get("staff_detection", {})
+            if staff_config.get("enabled", False):
+                processor_args["staff_detection_enable"] = True
+                processor_args["staff_detection_model_path"] = staff_config.get("model_path", "models/kidsplaza/best.pt")
+                processor_args["staff_detection_conf_threshold"] = staff_config.get("conf_threshold", 0.5)
+                logger.info(
+                    "Staff detection enabled for channel %d: model=%s, conf=%.2f",
+                    args.channel_id,
+                    processor_args["staff_detection_model_path"],
+                    processor_args["staff_detection_conf_threshold"],
+                )
             
             # Load counter config
             counter_config = channel_features.get("counter", {})

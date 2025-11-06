@@ -390,6 +390,8 @@ class VideoProcessor:
         video_path: Path,
         output_name: Optional[str] = None,
         save_annotated: bool = True,
+        max_seconds: Optional[int] = None,
+        display: bool = False,
     ) -> Dict:
         """
         Process video file through detection pipeline.
@@ -444,10 +446,12 @@ class VideoProcessor:
 
             logger.info(f"Output video: {output_path}")
 
-        # Process frames (limit to first 3 minutes for testing)
+        # Process frames (limit by max_seconds if provided)
         frame_results = []
         frame_num = 0
-        max_frames = min(total_frames, fps * 60 * 3)  # 3 minutes max
+        max_frames = total_frames
+        if max_seconds is not None and fps > 0:
+            max_frames = min(total_frames, int(fps * max_seconds))
         start_time = time.time()
         session_id = video_path.stem
         unique_track_ids = set()
@@ -837,10 +841,24 @@ class VideoProcessor:
                     f"Progress: {progress:.1f}% ({frame_num}/{total_frames} frames)"
                 )
 
+            # Optional display
+            if display:
+                win_name = "Video Test - Kidsplaza"
+                frame_to_show = annotated if annotated is not None else frame
+                cv2.imshow(win_name, frame_to_show)
+                if (cv2.waitKey(1) & 0xFF) == ord('q'):
+                    logger.info("User pressed 'q', stopping video processing")
+                    break
+
         # Cleanup
         cap.release()
         if video_writer is not None:
             video_writer.release()
+        if display:
+            try:
+                cv2.destroyAllWindows()
+            except Exception:
+                pass
         # Shutdown async worker
         if self.gender_worker is not None:
             self.gender_worker.shutdown()
@@ -995,6 +1013,17 @@ def main():
         type=str,
         default="output/videos",
         help="Output directory (default: output/videos)",
+    )
+    parser.add_argument(
+        "--max-seconds",
+        type=int,
+        default=60,
+        help="Process only the first N seconds of the video (default: 60)",
+    )
+    parser.add_argument(
+        "--display",
+        action="store_true",
+        help="Display frames in a window (press 'q' to quit)",
     )
     parser.add_argument(
         "--run-id",
@@ -1318,7 +1347,10 @@ def main():
 
         try:
             report = processor.process_video(
-                video_path, save_annotated=not args.no_annotate
+                video_path,
+                save_annotated=not args.no_annotate,
+                max_seconds=args.max_seconds,
+                display=bool(args.display),
             )
 
             # Print summary

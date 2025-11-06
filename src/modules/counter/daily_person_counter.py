@@ -62,10 +62,26 @@ class DailyPersonCounter:
         Returns:
             Dictionary with counts and events, including person_id in events.
         """
+        # Filter out staff - only count customers
+        # Check both is_staff flag and person_type for compatibility
+        customer_detections = [
+            det for det in detections
+            if det.get("is_staff") is not True
+            and det.get("person_type") != "staff"
+        ]
+        
+        if len(customer_detections) < len(detections):
+            staff_count = len(detections) - len(customer_detections)
+            logger.debug(
+                "Filtered out %d staff detection(s), processing %d customer detection(s)",
+                staff_count,
+                len(customer_detections),
+            )
+        
         # Step 1: Resolve person_id for each track
         detections_with_person: List[Dict[str, Any]] = []
         
-        for det in detections:
+        for det in customer_detections:
             track_id = det.get("track_id")
             if track_id is None:
                 continue

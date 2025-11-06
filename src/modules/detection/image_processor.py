@@ -114,7 +114,7 @@ class ImageProcessor:
         Args:
             frame: Input frame
             detections: List of detections
-            color: Box color (BGR format)
+            color: Box color (BGR format) - default green, overridden for staff (red)
             thickness: Box thickness
             show_labels: Whether to show labels
 
@@ -129,12 +129,30 @@ class ImageProcessor:
 
             x1, y1, x2, y2 = map(int, bbox)
 
+            # Determine color based on person type
+            # Staff: red (0, 0, 255), Customer: green (0, 255, 0) or default color
+            person_type = detection.get("person_type")
+            if person_type == "staff":
+                box_color = (0, 0, 255)  # Red for staff
+            elif person_type == "customer":
+                box_color = (0, 255, 0)  # Green for customer
+            else:
+                box_color = color  # Default color if not classified
+
             # Draw bounding box
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), color, thickness)
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), box_color, thickness)
 
             if show_labels:
                 # Build label preferring person_id (Re-ID) when available, else track_id
-                label = f"{detection.get('class_name', 'person')}: {conf:.2f}"
+                class_name = detection.get("class_name", "person")
+                
+                # Add person type label
+                if person_type == "staff":
+                    class_name = "Staff"
+                elif person_type == "customer":
+                    class_name = "Customer"
+                
+                label = f"{class_name}: {conf:.2f}"
                 person_id = detection.get("person_id") or detection.get("_person_id")
                 if person_id:
                     label = f"PID:{person_id} - {label}"
@@ -164,7 +182,7 @@ class ImageProcessor:
                     annotated,
                     (x1, y1 - text_height - baseline - 2),
                     (x1 + text_width, y1),
-                    color,
+                    box_color,
                     -1,
                 )
 

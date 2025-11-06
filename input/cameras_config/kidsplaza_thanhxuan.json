@@ -183,12 +183,12 @@
       "localtion":"ben_trong_cua_vao",
       "features": {
         "body_detection": {
-          "conf_threshold": 0.5,
+          "conf_threshold": 0.35,
           "detect_every_n": 1
         },
         "tracking": {
-          "max_age": 90,
-          "min_hits": 3,
+          "max_age": 60,
+          "min_hits": 2,
           "iou_threshold": 0.45,
           "ema_alpha": 0.75
         },
@@ -209,6 +209,11 @@
           "aggregation_method": "avg_sim",
           "append_mode": true,
           "max_embeddings": 5
+        },
+        "staff_detection": {
+          "enabled": true,
+          "model_path": "models/kidsplaza/best.pt",
+          "conf_threshold": 0.4
         },
         "counter": {
           "enabled": true,
