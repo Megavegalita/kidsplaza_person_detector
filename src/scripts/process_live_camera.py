@@ -318,10 +318,14 @@ class LiveCameraProcessor:
         if self.db_enable and db_dsn:
             try:
                 self.db_manager = PostgresManager(dsn=db_dsn)
+                logger.info("DB manager initialized successfully for channel %d", self.channel_id)
             except Exception as e:
                 logger.warning("DB init failed: %s", e)
                 self.db_manager = None
                 self.db_enable = False
+        else:
+            logger.info("DB disabled or DSN not provided for channel %d (db_enable=%s, db_dsn=%s)", 
+                       self.channel_id, self.db_enable, "provided" if db_dsn else "None")
 
         self.redis_enable = bool(redis_enable)
         self.redis_manager: Optional[RedisManager] = None
@@ -1170,7 +1174,7 @@ class LiveCameraProcessor:
                                             extra_json={"run_id": self.run_id or "", "session_id": session_id},
                                         )
                                     except Exception as e:
-                                        logger.debug("Failed to insert counter_event: %s", e)
+                                        logger.warning("Failed to insert counter_event: %s", e, exc_info=True)
                     except Exception as e:
                         logger.warning("Counter update error: %s", e)
 
