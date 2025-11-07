@@ -3,14 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Counter Events Dashboard</title>
+    <title>Kidsplaza AI Counter System</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>📊 Counter Events Dashboard</h1>
+            <h1>📊 Kidsplaza AI Counter System</h1>
             <p class="subtitle">Thống kê người vào/ra theo thời gian thực</p>
         </header>
 
@@ -25,10 +25,11 @@
                 <input type="date" id="end-date-filter" value="{{ today }}">
             </div>
             <div class="filter-group">
-                <label for="channel-filter">Channel:</label>
-                <select id="channel-filter">
-                    <option value="">Tất cả</option>
-                </select>
+                <label for="channel-select-btn">Channel:</label>
+                <button type="button" id="channel-select-btn" class="btn-channel-select">
+                    <span id="channel-select-text">Chọn channels...</span>
+                    <span id="channel-count-badge" class="channel-count-badge" style="display: none;">0</span>
+                </button>
             </div>
             <div class="filter-group">
                 <label for="zone-filter">Zone:</label>
@@ -112,8 +113,13 @@
 
         <!-- Recent Events Table -->
         <div class="table-container">
-            <h2>Events gần đây</h2>
-            <div class="table-wrapper">
+            <div class="table-header">
+                <h2>Events gần đây</h2>
+                <button id="toggle-events" class="btn-toggle" title="Thu gọn/Mở rộng">
+                    <span id="toggle-icon">▼</span>
+                </button>
+            </div>
+            <div class="table-wrapper" id="events-wrapper">
                 <table id="events-table">
                     <thead>
                         <tr>
@@ -131,6 +137,29 @@
                         </tr>
                     </tbody>
                 </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Channel Selection Modal -->
+    <div id="channel-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Chọn Channels</h2>
+                <button class="modal-close" id="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="modal-actions">
+                    <button type="button" id="select-all-channels" class="btn-select-all">Chọn tất cả</button>
+                    <button type="button" id="deselect-all-channels" class="btn-deselect-all">Bỏ chọn tất cả</button>
+                </div>
+                <div id="channels-list" class="channels-list">
+                    <!-- Channels will be loaded here -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" id="modal-cancel" class="btn-secondary">Hủy</button>
+                <button type="button" id="modal-apply" class="btn-primary">Áp dụng</button>
             </div>
         </div>
     </div>

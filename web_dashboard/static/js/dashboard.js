@@ -5,6 +5,8 @@ let refreshInterval = null;
 let countdownInterval = null;
 let currentRefreshSeconds = 30;
 let countdownSeconds = 30;
+let selectedChannelIds = [];
+let allChannels = [];
 
 // Initialize dashboard
 document.addEventListener('DOMContentLoaded', function() {
@@ -34,7 +36,8 @@ document.addEventListener('DOMContentLoaded', function() {
         const today = new Date().toISOString().split('T')[0];
         document.getElementById('start-date-filter').value = today;
         document.getElementById('end-date-filter').value = today;
-        document.getElementById('channel-filter').value = '';
+        selectedChannelIds = [];
+        updateChannelSelectButton();
         document.getElementById('zone-filter').value = '';
         document.getElementById('refresh-interval').value = '30';
         currentRefreshSeconds = 30;
@@ -43,6 +46,9 @@ document.addEventListener('DOMContentLoaded', function() {
         loadSummary();
         loadRecentEvents();
     });
+
+    // Channel modal handlers
+    setupChannelModal();
 
     // Refresh interval change handler
     document.getElementById('refresh-interval').addEventListener('change', function() {
@@ -59,6 +65,32 @@ document.addEventListener('DOMContentLoaded', function() {
         resetCountdown();
     });
 
+    // Toggle events table
+    const toggleEventsBtn = document.getElementById('toggle-events');
+    const eventsWrapper = document.getElementById('events-wrapper');
+    const toggleIcon = document.getElementById('toggle-icon');
+    let eventsExpanded = true;
+
+    // Load collapsed state from localStorage
+    const savedEventsState = localStorage.getItem('dashboard_events_expanded');
+    if (savedEventsState === 'false') {
+        eventsExpanded = false;
+        eventsWrapper.classList.add('collapsed');
+        toggleIcon.classList.add('collapsed');
+    }
+
+    toggleEventsBtn.addEventListener('click', function() {
+        eventsExpanded = !eventsExpanded;
+        if (eventsExpanded) {
+            eventsWrapper.classList.remove('collapsed');
+            toggleIcon.classList.remove('collapsed');
+        } else {
+            eventsWrapper.classList.add('collapsed');
+            toggleIcon.classList.add('collapsed');
+        }
+        localStorage.setItem('dashboard_events_expanded', eventsExpanded.toString());
+    });
+
     // Load available channels and zones
     loadAvailableOptions();
 
@@ -67,20 +99,27 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 function loadAvailableOptions() {
+    // Load channels from API
+    fetch('/api/channels')
+        .then(response => response.json())
+        .then(data => {
+            allChannels = data.channels || [];
+            renderChannelsList();
+        })
+        .catch(error => {
+            console.error('Error loading channels:', error);
+        });
+
+    // Load zones from summary API
     fetch('/api/summary')
         .then(response => response.json())
         .then(data => {
-            // Populate channel filter
-            const channelSelect = document.getElementById('channel-filter');
-            data.available_channels.forEach(channel => {
-                const option = document.createElement('option');
-                option.value = channel;
-                option.textContent = `Channel ${channel}`;
-                channelSelect.appendChild(option);
-            });
-
             // Populate zone filter
             const zoneSelect = document.getElementById('zone-filter');
+            // Clear existing options except "Tất cả"
+            while (zoneSelect.options.length > 1) {
+                zoneSelect.remove(1);
+            }
             data.available_zones.forEach(zone => {
                 const option = document.createElement('option');
                 option.value = zone;
@@ -89,27 +128,161 @@ function loadAvailableOptions() {
             });
         })
         .catch(error => {
-            console.error('Error loading options:', error);
+            console.error('Error loading zones:', error);
         });
+}
+
+function setupChannelModal() {
+    const modal = document.getElementById('channel-modal');
+    const openBtn = document.getElementById('channel-select-btn');
+    const closeBtn = document.getElementById('modal-close');
+    const cancelBtn = document.getElementById('modal-cancel');
+    const applyBtn = document.getElementById('modal-apply');
+    const selectAllBtn = document.getElementById('select-all-channels');
+    const deselectAllBtn = document.getElementById('deselect-all-channels');
+
+    // Open modal
+    openBtn.addEventListener('click', function() {
+        modal.style.display = 'block';
+        updateChannelsCheckboxes();
+    });
+
+    // Close modal
+    function closeModal() {
+        modal.style.display = 'none';
+    }
+
+    closeBtn.addEventListener('click', closeModal);
+    cancelBtn.addEventListener('click', closeModal);
+
+    // Click outside modal to close
+    window.addEventListener('click', function(event) {
+        if (event.target === modal) {
+            closeModal();
+        }
+    });
+
+    // Select all
+    selectAllBtn.addEventListener('click', function() {
+        selectedChannelIds = allChannels.map(ch => ch.channel_id);
+        updateChannelsCheckboxes();
+    });
+
+    // Deselect all
+    deselectAllBtn.addEventListener('click', function() {
+        selectedChannelIds = [];
+        updateChannelsCheckboxes();
+    });
+
+    // Apply selection
+    applyBtn.addEventListener('click', function() {
+        updateChannelSelectButton();
+        closeModal();
+        loadSummary();
+        loadRecentEvents();
+    });
+}
+
+function renderChannelsList() {
+    const channelsList = document.getElementById('channels-list');
+    channelsList.innerHTML = '';
+
+    allChannels.forEach(channel => {
+        const channelItem = document.createElement('div');
+        channelItem.className = 'channel-item';
+        
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.id = `channel-${channel.channel_id}`;
+        checkbox.value = channel.channel_id;
+        checkbox.addEventListener('change', function() {
+            if (this.checked) {
+                if (!selectedChannelIds.includes(channel.channel_id)) {
+                    selectedChannelIds.push(channel.channel_id);
+                }
+            } else {
+                selectedChannelIds = selectedChannelIds.filter(id => id !== channel.channel_id);
+            }
+        });
+
+        const label = document.createElement('label');
+        label.htmlFor = `channel-${channel.channel_id}`;
+        label.className = 'channel-label';
+        
+        const address = channel.address || '';
+        const location = channel.location || '';
+        const description = channel.description || `Channel ${channel.channel_id}`;
+        
+        label.innerHTML = `
+            <span class="channel-info">
+                <strong>Channel ${channel.channel_id}</strong>
+                <span class="channel-details">${address} - ${location}</span>
+                <span class="channel-description">${description}</span>
+            </span>
+        `;
+
+        channelItem.appendChild(checkbox);
+        channelItem.appendChild(label);
+        channelsList.appendChild(channelItem);
+    });
+}
+
+function updateChannelsCheckboxes() {
+    allChannels.forEach(channel => {
+        const checkbox = document.getElementById(`channel-${channel.channel_id}`);
+        if (checkbox) {
+            checkbox.checked = selectedChannelIds.includes(channel.channel_id);
+        }
+    });
+}
+
+function updateChannelSelectButton() {
+    const selectText = document.getElementById('channel-select-text');
+    const countBadge = document.getElementById('channel-count-badge');
+    
+    if (selectedChannelIds.length === 0) {
+        selectText.textContent = 'Chọn channels...';
+        countBadge.style.display = 'none';
+    } else if (selectedChannelIds.length === allChannels.length) {
+        selectText.textContent = 'Tất cả channels';
+        countBadge.style.display = 'none';
+    } else {
+        const selectedChannels = allChannels
+            .filter(ch => selectedChannelIds.includes(ch.channel_id))
+            .map(ch => `Ch${ch.channel_id}`)
+            .join(', ');
+        selectText.textContent = selectedChannels;
+        countBadge.textContent = selectedChannelIds.length;
+        countBadge.style.display = 'inline-block';
+    }
 }
 
 function loadSummary() {
     const startDate = document.getElementById('start-date-filter').value;
     const endDate = document.getElementById('end-date-filter').value;
-    const channel = document.getElementById('channel-filter').value;
     const zone = document.getElementById('zone-filter').value;
 
     let url = `/api/summary?start_date=${startDate}&end_date=${endDate}`;
-    if (channel) {
-        url += `&channel_id=${channel}`;
+    if (selectedChannelIds.length > 0) {
+        url += `&channel_ids=${selectedChannelIds.join(',')}`;
     }
     if (zone) {
         url += `&zone_id=${zone}`;
     }
 
     fetch(url)
-        .then(response => response.json())
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+        })
         .then(data => {
+            // Check if data is valid
+            if (!data) {
+                throw new Error('Không có dữ liệu trả về');
+            }
+
             // Update summary cards
             document.getElementById('total-enter').textContent = data.total_enter || 0;
             document.getElementById('total-exit').textContent = data.total_exit || 0;
@@ -118,34 +291,41 @@ function loadSummary() {
             document.getElementById('net-count').textContent = data.net_count || 0;
 
             // Update charts - sử dụng số người (unique tracks) thay vì số lượt
-            updateHourlyChart(data.hourly_data, startDate, endDate);
-            updateSummaryChart(data.unique_tracks_entered, data.unique_tracks_exited);
+            if (data.hourly_data) {
+                updateHourlyChart(data.hourly_data, startDate, endDate);
+            }
+            updateSummaryChart(data.unique_tracks_entered || 0, data.unique_tracks_exited || 0);
         })
         .catch(error => {
             console.error('Error loading summary:', error);
+            console.error('URL:', url);
             alert('Lỗi khi tải dữ liệu: ' + error.message);
         });
 }
 
 function loadRecentEvents() {
-    const channel = document.getElementById('channel-filter').value;
     const zone = document.getElementById('zone-filter').value;
 
     let url = `/api/recent-events?limit=50`;
-    if (channel) {
-        url += `&channel_id=${channel}`;
+    if (selectedChannelIds.length > 0) {
+        url += `&channel_ids=${selectedChannelIds.join(',')}`;
     }
     if (zone) {
         url += `&zone_id=${zone}`;
     }
 
     fetch(url)
-        .then(response => response.json())
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+        })
         .then(data => {
             const tbody = document.getElementById('events-tbody');
             tbody.innerHTML = '';
 
-            if (data.events && data.events.length > 0) {
+            if (data && data.events && data.events.length > 0) {
                 data.events.forEach(event => {
                     const row = document.createElement('tr');
                     const timestamp = new Date(event.timestamp);
@@ -174,8 +354,9 @@ function loadRecentEvents() {
         })
         .catch(error => {
             console.error('Error loading recent events:', error);
+            console.error('URL:', url);
             document.getElementById('events-tbody').innerHTML = 
-                '<tr><td colspan="6" class="loading">Lỗi khi tải dữ liệu</td></tr>';
+                '<tr><td colspan="6" class="loading">Lỗi khi tải dữ liệu: ' + error.message + '</td></tr>';
         });
 }
 

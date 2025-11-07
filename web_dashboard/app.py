@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 CONFIG_PATH = ROOT / "config" / "database.json"
+CAMERA_CONFIG_PATH = ROOT / "input" / "cameras_config" / "kidsplaza_thanhxuan.json"
 
 app = Flask(__name__)
 
@@ -55,8 +56,35 @@ def get_timestamp_column(conn) -> str:
         return row["column_name"] if row else "event_timestamp"
 
 
+def load_camera_channels() -> Dict:
+    """Load camera channels information from config file."""
+    try:
+        if not CAMERA_CONFIG_PATH.exists():
+            return {"channels": [], "address": ""}
+        
+        with open(CAMERA_CONFIG_PATH, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        
+        channels = []
+        address = config.get("address", "")
+        
+        for channel in config.get("channels", []):
+            channels.append({
+                "channel_id": channel.get("channel_id"),
+                "name": channel.get("name", ""),
+                "description": channel.get("description", ""),
+                "location": channel.get("localtion", ""),  # Note: typo in config "localtion"
+                "address": address,
+            })
+        
+        return {"channels": channels, "address": address}
+    except Exception as e:
+        print(f"Error loading camera config: {e}")
+        return {"channels": [], "address": ""}
+
+
 def get_daily_summary(
-    channel_id: Optional[int] = None,
+    channel_ids: Optional[list] = None,
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
     zone_id: Optional[str] = None,
@@ -86,9 +114,10 @@ def get_daily_summary(
             conditions = [f"{timestamp_col} >= %s", f"{timestamp_col} <= %s"]
             params = [start_datetime, end_datetime]
 
-            if channel_id:
-                conditions.append("channel_id = %s")
-                params.append(channel_id)
+            if channel_ids and len(channel_ids) > 0:
+                placeholders = ",".join(["%s"] * len(channel_ids))
+                conditions.append(f"channel_id IN ({placeholders})")
+                params.extend(channel_ids)
 
             if zone_id:
                 conditions.append("zone_id = %s")
@@ -185,7 +214,7 @@ def get_daily_summary(
             return {
                 "start_date": start_date.strftime("%Y-%m-%d"),
                 "end_date": end_date.strftime("%Y-%m-%d"),
-                "channel_id": channel_id,
+                "channel_ids": channel_ids if channel_ids else None,
                 "zone_id": zone_id,
                 "total_enter": total_enter,
                 "total_exit": total_exit,
@@ -205,11 +234,35 @@ def index():
     return render_template("index.html", today=today)
 
 
+@app.route("/api/channels")
+def api_channels():
+    """API endpoint for camera channels information."""
+    try:
+        channels_info = load_camera_channels()
+        return jsonify(channels_info)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/summary")
 def api_summary():
     """API endpoint for summary data."""
     try:
+        # Support both single channel_id and multiple channel_ids
         channel_id = request.args.get("channel_id", type=int)
+        channel_ids_str = request.args.get("channel_ids")
+        
+        channel_ids = None
+        if channel_ids_str:
+            # Parse comma-separated channel IDs
+            try:
+                channel_ids = [int(cid.strip()) for cid in channel_ids_str.split(",") if cid.strip()]
+            except ValueError:
+                return jsonify({"error": "Invalid channel_ids format. Use comma-separated integers"}), 400
+        elif channel_id:
+            # Backward compatibility: single channel_id
+            channel_ids = [channel_id]
+        
         start_date_str = request.args.get("start_date")
         end_date_str = request.args.get("end_date")
         zone_id = request.args.get("zone_id")
@@ -230,7 +283,7 @@ def api_summary():
                 return jsonify({"error": "Invalid end_date format. Use YYYY-MM-DD"}), 400
 
         summary = get_daily_summary(
-            channel_id=channel_id,
+            channel_ids=channel_ids,
             start_date=start_date,
             end_date=end_date,
             zone_id=zone_id,
@@ -247,6 +300,7 @@ def api_recent_events():
     try:
         limit = request.args.get("limit", default=50, type=int)
         channel_id = request.args.get("channel_id", type=int)
+        channel_ids_str = request.args.get("channel_ids")
         zone_id = request.args.get("zone_id")
 
         dsn = load_dsn()
@@ -258,7 +312,19 @@ def api_recent_events():
                 conditions = []
                 params = []
 
-                if channel_id:
+                # Support multiple channel_ids
+                channel_ids = None
+                if channel_ids_str:
+                    try:
+                        channel_ids = [int(cid.strip()) for cid in channel_ids_str.split(",") if cid.strip()]
+                    except ValueError:
+                        pass
+                
+                if channel_ids and len(channel_ids) > 0:
+                    placeholders = ",".join(["%s"] * len(channel_ids))
+                    conditions.append(f"channel_id IN ({placeholders})")
+                    params.extend(channel_ids)
+                elif channel_id:
                     conditions.append("channel_id = %s")
                     params.append(channel_id)
 
@@ -308,5 +374,5 @@ def api_recent_events():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=8080)
+    app.run(debug=True, host="0.0.0.0", port=8000)
 

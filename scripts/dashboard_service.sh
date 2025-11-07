@@ -4,7 +4,7 @@
 DASHBOARD_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DASHBOARD_SCRIPT="$DASHBOARD_DIR/web_dashboard/app.py"
 LOG_DIR="$DASHBOARD_DIR/logs"
-PORT=8080
+PORT=8000
 
 case "$1" in
     start)
@@ -26,7 +26,8 @@ case "$1" in
         
         if pgrep -f "web_dashboard/app.py" > /dev/null; then
             echo "✅ Dashboard đã khởi động thành công"
-            echo "🌐 URL: http://localhost:$PORT"
+            echo "🌐 URL nội bộ: http://localhost:$PORT"
+            echo "🌐 URL mạng: http://192.168.0.243:$PORT"
             echo "📝 Log: $LOG_DIR/dashboard_*.log"
             ps aux | grep "web_dashboard/app.py" | grep -v grep | awk '{print "   PID:", $2}'
         else
@@ -55,7 +56,8 @@ case "$1" in
     status)
         if pgrep -f "web_dashboard/app.py" > /dev/null; then
             echo "✅ Dashboard đang chạy"
-            echo "🌐 URL: http://localhost:$PORT"
+            echo "🌐 URL nội bộ: http://localhost:$PORT"
+            echo "🌐 URL mạng: http://192.168.0.243:$PORT"
             ps aux | grep "web_dashboard/app.py" | grep -v grep
             echo ""
             # Test API
