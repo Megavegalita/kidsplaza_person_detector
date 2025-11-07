@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Counter Events Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📊 Counter Events Dashboard</h1>
+            <p class="subtitle">Thống kê người vào/ra theo thời gian thực</p>
+        </header>
+
+        <!-- Filters -->
+        <div class="filters">
+            <div class="filter-group">
+                <label for="start-date-filter">Từ ngày:</label>
+                <input type="date" id="start-date-filter" value="{{ today }}">
+            </div>
+            <div class="filter-group">
+                <label for="end-date-filter">Đến ngày:</label>
+                <input type="date" id="end-date-filter" value="{{ today }}">
+            </div>
+            <div class="filter-group">
+                <label for="channel-filter">Channel:</label>
+                <select id="channel-filter">
+                    <option value="">Tất cả</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label for="zone-filter">Zone:</label>
+                <select id="zone-filter">
+                    <option value="">Tất cả</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label for="refresh-interval">Tự động cập nhật:</label>
+                <select id="refresh-interval">
+                    <option value="10">10 giây</option>
+                    <option value="30" selected>30 giây</option>
+                    <option value="60">1 phút</option>
+                    <option value="120">2 phút</option>
+                    <option value="300">5 phút</option>
+                    <option value="0">Tắt</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <button id="apply-filters" class="btn-primary">Áp dụng</button>
+                <button id="reset-filters" class="btn-secondary">Reset</button>
+            </div>
+        </div>
+
+        <!-- Refresh Status -->
+        <div class="refresh-status">
+            <span id="refresh-indicator">⏱️ Tự động cập nhật: <span id="refresh-time">30</span> giây | Lần cập nhật tiếp theo: <span id="countdown">30</span>s</span>
+            <button id="manual-refresh" class="btn-refresh">🔄 Cập nhật ngay</button>
+        </div>
+
+        <!-- Summary Cards -->
+        <div class="summary-cards">
+            <div class="card card-primary">
+                <div class="card-icon">🚪</div>
+                <div class="card-content">
+                    <div class="card-label">Số lượt vào</div>
+                    <div class="card-value" id="total-enter">0</div>
+                </div>
+            </div>
+            <div class="card card-success">
+                <div class="card-icon">🚶</div>
+                <div class="card-content">
+                    <div class="card-label">Số lượt ra</div>
+                    <div class="card-value" id="total-exit">0</div>
+                </div>
+            </div>
+            <div class="card card-info">
+                <div class="card-icon">👥</div>
+                <div class="card-content">
+                    <div class="card-label">Người đã vào</div>
+                    <div class="card-value" id="unique-entered">0</div>
+                </div>
+            </div>
+            <div class="card card-warning">
+                <div class="card-icon">👤</div>
+                <div class="card-content">
+                    <div class="card-label">Người đã ra</div>
+                    <div class="card-value" id="unique-exited">0</div>
+                </div>
+            </div>
+            <div class="card card-danger">
+                <div class="card-icon">📍</div>
+                <div class="card-content">
+                    <div class="card-label">Hiện tại trong khu vực</div>
+                    <div class="card-value" id="net-count">0</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Charts -->
+        <div class="charts-container">
+            <div class="chart-wrapper">
+                <h2 id="hourly-chart-title">Số người vào/ra theo giờ</h2>
+                <canvas id="hourly-chart"></canvas>
+            </div>
+            <div class="chart-wrapper">
+                <h2>Tổng quan số người vào/ra</h2>
+                <canvas id="summary-chart"></canvas>
+            </div>
+        </div>
+
+        <!-- Recent Events Table -->
+        <div class="table-container">
+            <h2>Events gần đây</h2>
+            <div class="table-wrapper">
+                <table id="events-table">
+                    <thead>
+                        <tr>
+                            <th>Thời gian</th>
+                            <th>Channel</th>
+                            <th>Zone</th>
+                            <th>Loại</th>
+                            <th>Track ID</th>
+                            <th>Person ID</th>
+                        </tr>
+                    </thead>
+                    <tbody id="events-tbody">
+                        <tr>
+                            <td colspan="6" class="loading">Đang tải dữ liệu...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+</body>
+</html>
+
